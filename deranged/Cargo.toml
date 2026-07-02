@@ -1,6 +1,6 @@
 [package]
 name = "deranged"
-version = "0.5.8"
+version = "0.5.9"
 authors = ["Jacob Pratt <jacob@jhpratt.dev>"]
 edition = "2021"
 rust-version = "1.85.0"
@@ -12,7 +12,7 @@ description = "Ranged integers"
 include = ["src/**/*", "LICENSE-*", "README.md"]
 
 [features]
-default = ["borsh", "serde", "schemars", "sqlx09", "borsh_schema"]
+default = [] # no defaults
 alloc = []
 arbitrary = ["dep:arbitrary"]
 bytemuck = ["dep:bytemuck"]
@@ -30,6 +30,12 @@ rand09 = ["dep:rand09"]
 rand010 = ["dep:rand010"]
 serde = ["dep:serde_core"]
 schemars = ["dep:schemars", "alloc"]
+# currently sqlx09 is hack, and i forbid u32 map to i32 which is unsafe, and use i64. 
+# later i use wrapper for custom domain type mapping
+# really the only sound option here is type wittneses `pg + type range<MIN, MAX>` 
+# (pg witness needed to ensure we do not constraint other dbs with same backing)
+# to allow decide proper domain type at compile time
+# I do not thing we should hack unsound `works for me` into shared codes - shared code imho to be panic safe
 sqlx09 = ["dep:sqlx09", "alloc", "dep:num-traits"]
 zerocopy = ["dep:zerocopy", "dep:zerocopy-derive"]
 

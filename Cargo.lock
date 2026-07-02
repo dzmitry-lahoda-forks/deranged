@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "deranged"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "arbitrary",
  "atomic",
