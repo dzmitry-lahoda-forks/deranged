@@ -860,6 +860,25 @@ macro_rules! tests {
             }
         }
 
+        #[cfg(feature = "bytemuck")]
+        #[test]
+        fn bytemuck_no_uninit() {
+            fn assert_no_uninit<T: bytemuck::NoUninit>() {}
+
+            assert_no_uninit::<RangedU8<5, 10>>();
+            assert_no_uninit::<RangedI16<-5, 10>>();
+            assert_no_uninit::<OptionRangedU8<5, 10>>();
+
+            let ranged_u8 = RangedU8::<5, 10>::MAX;
+            assert_eq!(bytemuck::bytes_of(&ranged_u8), &[10]);
+
+            let ranged_i16 = RangedI16::<-5, 10>::MIN;
+            assert_eq!(bytemuck::bytes_of(&ranged_i16), &(-5_i16).to_ne_bytes());
+
+            let optional = OptionRangedU8::<5, 10>::Some(RangedU8::<5, 10>::MIN);
+            assert_eq!(bytemuck::bytes_of(&optional), &[5]);
+        }
+
         #[cfg(feature = "proptest")]
         #[test]
         fn proptest() {

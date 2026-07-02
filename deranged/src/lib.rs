@@ -365,6 +365,22 @@ macro_rules! impl_ranged {
             $internal,
         );
 
+        #[cfg(feature = "bytemuck")]
+        // Safety: The type is `repr(transparent)` over an integer type, which has no uninitialized
+        // bytes. The range invariant restricts valid values, so this must not imply `AnyBitPattern`.
+        unsafe impl<const MIN: $internal, const MAX: $internal> bytemuck::NoUninit
+            for $type<MIN, MAX>
+        {
+        }
+
+        #[cfg(feature = "bytemuck")]
+        // Safety: The type is `repr(transparent)` over an integer type, which has no uninitialized
+        // bytes. The niche invariant restricts valid values, so this must not imply `AnyBitPattern`.
+        unsafe impl<const MIN: $internal, const MAX: $internal> bytemuck::NoUninit
+            for $optional_type<MIN, MAX>
+        {
+        }
+
         impl $type<0, 0> {
             #[doc = concat!("A ", stringify!($type), " that is always `VALUE`.")]
             #[inline(always)]
