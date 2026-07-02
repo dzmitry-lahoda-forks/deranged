@@ -1,4 +1,5 @@
 //! `deranged` is a proof-of-concept implementation of ranged integers.
+//!  Fork optimizes `max(utility) = max(correctness - friction)`, which upstream totally rejects (no literals, no 3rd party crates, etc)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
@@ -24,8 +25,10 @@ use core::cmp::Ordering;
 use core::error::Error;
 use core::fmt;
 use core::hint::assert_unchecked;
-use core::num::{IntErrorKind, NonZero};
+use core::num::NonZero;
 use core::str::FromStr;
+
+pub use core::num::{IntErrorKind, ParseIntError};
 
 /// A macro to define a ranged integer with an automatically computed inner type.
 ///
@@ -92,71 +95,19 @@ impl fmt::Display for TryFromIntError {
         f.write_str("out of range integral type conversion attempted")
     }
 }
+
 impl Error for TryFromIntError {}
 
-/// An error which can be returned when parsing an integer.
-///
-/// This error is used as the error type for the `from_str_radix()` functions on ranged integer
-/// types, such as [`RangedI8::from_str_radix`].
-///
-/// # Potential causes
-///
-/// Among other causes, `ParseIntError` can be thrown because of leading or trailing whitespace
-/// in the string e.g., when it is obtained from the standard input.
-/// Using the [`str::trim()`] method ensures that no whitespace remains before parsing.
-///
-/// # Example
-///
-/// ```rust
-/// # use deranged::RangedI32;
-/// if let Err(e) = RangedI32::<0, 10>::from_str_radix("a12", 10) {
-///     println!("Failed conversion to RangedI32: {e}");
-/// }
-/// ```
-#[allow(missing_copy_implementations)] // same as `std`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseIntError {
-    #[allow(clippy::missing_docs_in_private_items)]
-    kind: IntErrorKind,
-}
-
-impl ParseIntError {
-    /// Outputs the detailed cause of parsing an integer failing.
-    // This function is not const because the counterpart of stdlib isn't
-    #[allow(clippy::missing_const_for_fn)]
-    #[inline(always)]
-    pub fn kind(&self) -> &IntErrorKind {
-        &self.kind
-    }
-}
-
-/// Copies a parse error from the primitive integer parser.
+/// Constructs a primitive parse error with the provided kind.
 ///
 /// # Safety
 ///
-/// `core::num::ParseIntError` and [`ParseIntError`] must have identical layouts.
+/// `core::num::ParseIntError` must have the same layout as `core::num::IntErrorKind`.
 #[inline(always)]
-const unsafe fn copy_parse_int_error(error: &core::num::ParseIntError) -> ParseIntError {
+const unsafe fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
     // Safety: The caller guarantees that the source and destination error layouts match.
-    unsafe { core::mem::transmute_copy(error) }
+    unsafe { core::mem::transmute_copy(&kind) }
 }
-
-impl fmt::Display for ParseIntError {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
-            IntErrorKind::Empty => "cannot parse integer from empty string",
-            IntErrorKind::InvalidDigit => "invalid digit found in string",
-            IntErrorKind::PosOverflow => "number too large to fit in target type",
-            IntErrorKind::NegOverflow => "number too small to fit in target type",
-            IntErrorKind::Zero => "number would be zero for non-zero type",
-            _ => "Unknown Int error kind",
-        }
-        .fmt(f)
-    }
-}
-
-impl Error for ParseIntError {}
 
 /// `?` for `Option` types, usable in `const` contexts.
 macro_rules! const_try_opt {
@@ -300,6 +251,7 @@ macro_rules! impl_ranged {
             optional: $optional_type:ident
             optional_alias: $optional_alias:ident
             from: [$($from:ident($from_internal:ident))+]
+            $(prost_type: $prost_type:ident)?
             $(sqlx: $sql_int:ident)?
             $(manual: [$($skips:ident)+])?
         }
@@ -596,10 +548,12 @@ macro_rules! impl_ranged {
 
                 match const_parse_int!($internal, src) {
                     Ok(value) if value > MAX => {
-                        Err(ParseIntError { kind: IntErrorKind::PosOverflow })
+                        // Safety: `ParseIntError` stores an `IntErrorKind`.
+                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::PosOverflow) })
                     }
                     Ok(value) if value < MIN => {
-                        Err(ParseIntError { kind: IntErrorKind::NegOverflow })
+                        // Safety: `ParseIntError` stores an `IntErrorKind`.
+                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::NegOverflow) })
                     }
                     // Safety: If the value was out of range, it would have been caught in a
                     // previous arm.
@@ -641,18 +595,17 @@ macro_rules! impl_ranged {
                 const { assert!(MIN <= MAX); }
                 match $internal::from_str_radix(src, radix) {
                     Ok(value) if value > MAX => {
-                        Err(ParseIntError { kind: IntErrorKind::PosOverflow })
+                        // Safety: `ParseIntError` stores an `IntErrorKind`.
+                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::PosOverflow) })
                     }
                     Ok(value) if value < MIN => {
-                        Err(ParseIntError { kind: IntErrorKind::NegOverflow })
+                        // Safety: `ParseIntError` stores an `IntErrorKind`.
+                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::NegOverflow) })
                     }
                     // Safety: If the value was out of range, it would have been caught in a
                     // previous arm.
                     Ok(value) => Ok(unsafe { Self::new_unchecked(value) }),
-                    Err(e) => {
-                        // Safety: The local error type mirrors the primitive parse error layout.
-                        Err(unsafe { copy_parse_int_error(&e) })
-                    }
+                    Err(e) => Err(e),
                 }
             }
 
@@ -1997,6 +1950,38 @@ macro_rules! impl_ranged {
         }
 
         $(
+        #[cfg(feature = "prost-types")]
+        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+            for prost_types::Value
+        {
+            #[inline(always)]
+            #[allow(trivial_numeric_casts)]
+            fn from(value: $type<MIN, MAX>) -> Self {
+                const { assert!(MIN <= MAX); }
+                (value.get() as $prost_type).into()
+            }
+        }
+
+        #[cfg(feature = "prost-types")]
+        impl<const MIN: $internal, const MAX: $internal> From<$optional_type<MIN, MAX>>
+            for prost_types::Value
+        {
+            #[inline(always)]
+            #[allow(trivial_numeric_casts)]
+            fn from(value: $optional_type<MIN, MAX>) -> Self {
+                const { assert!(MIN <= MAX); }
+                match value.get_primitive() {
+                    Some(value) => (value as $prost_type).into(),
+                    None => prost_types::value::Kind::NullValue(
+                        prost_types::NullValue::NullValue as i32,
+                    )
+                    .into(),
+                }
+            }
+        }
+        )?
+
+        $(
         #[cfg(feature = "sqlx09")]
         impl<const MIN: $internal, const MAX: $internal> sqlx09::Type<sqlx09::Postgres>
             for $type<MIN, MAX>
@@ -2328,6 +2313,7 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
+        prost_type: u8
         sqlx: i16
     }
     RangedU16 {
@@ -2351,7 +2337,8 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
-        sqlx: i16
+        prost_type: u16
+        sqlx: i32
     }
     RangedU32 {
         mod_name: ranged_u32
@@ -2374,7 +2361,8 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
-        sqlx: i32
+        prost_type: u32
+        sqlx: i64
     }
     RangedU64 {
         mod_name: ranged_u64
@@ -2396,8 +2384,7 @@ impl_ranged! {
             RangedI64(i64)
             RangedI128(i128)
             RangedIsize(isize)
-        ]
-        sqlx: i64
+        ]        
     }
     RangedU128 {
         mod_name: ranged_u128
@@ -2465,6 +2452,7 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
+        prost_type: i8
         sqlx: i16
     }
     RangedI16 {
@@ -2488,6 +2476,7 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
+        prost_type: i16
         sqlx: i16
     }
     RangedI32 {
@@ -2511,6 +2500,7 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
+        prost_type: i32
         sqlx: i32
     }
     RangedI64 {

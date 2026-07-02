@@ -22,6 +22,7 @@ macros = ["dep:deranged-macros"]
 num = ["dep:num-traits"]
 powerfmt = ["dep:powerfmt"]
 proptest = ["dep:proptest"]
+prost-types = ["dep:prost-types"]
 quickcheck = ["dep:quickcheck", "alloc"]
 rand = ["rand08", "rand09", "rand010"]
 rand08 = ["dep:rand08"]
@@ -58,6 +59,7 @@ zerocopy = { version = "0.8.31", optional = true, default-features = false }
 zerocopy-derive = { version = "0.8.31", optional = true, default-features = false }
 schemars = { version = "1.2.1", optional = true, default-features = false }
 sqlx09 = { package = "sqlx", version = "0.9.0-alpha.1", optional = true, features = [ "postgres", "bigdecimal" ], default-features = false }
+prost-types = { version = "0.14.1", optional = true, default-features = false }
 
 [dev-dependencies]
 arbitrary = "1.4.2"
@@ -66,4 +68,5 @@ rand08 = { package = "rand", version = "0.8.4" }
 rand09 = { package = "rand", version = "0.9.0" }
 rand010 = { package = "rand", version = "0.10.0" }
 proptest = "1.11.0"
+prost = { version = "0.14.1", default-features = false }
 serde_json = "1.0.86"

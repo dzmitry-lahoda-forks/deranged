@@ -900,6 +900,52 @@ macro_rules! tests {
             );
         }
 
+        #[test]
+        fn prost_varint() {
+            let value = RangedU32::<0, 300>::MAX;
+            let raw = u64::from(value.get());
+            let mut buf = Vec::new();
+
+            prost::encoding::encode_varint(raw, &mut buf);
+
+            assert_eq!(prost::encoding::encoded_len_varint(raw), buf.len());
+
+            let decoded = prost::encoding::decode_varint(&mut buf.as_slice())
+                .expect("prost failed to decode varint");
+            let decoded = u32::try_from(decoded).expect("decoded varint did not fit in u32");
+
+            assert_eq!(RangedU32::<0, 300>::new(decoded), Some(value));
+
+            let mut out_of_range = Vec::new();
+            prost::encoding::encode_varint(301, &mut out_of_range);
+            let decoded = prost::encoding::decode_varint(&mut out_of_range.as_slice())
+                .expect("prost failed to decode varint");
+            let decoded = u32::try_from(decoded).expect("decoded varint did not fit in u32");
+
+            assert_eq!(RangedU32::<0, 300>::new(decoded), None);
+        }
+
+        #[cfg(feature = "prost-types")]
+        #[test]
+        fn prost_types_value() {
+            assert_eq!(
+                prost_types::Value::from(RangedU32::<0, 300>::MAX),
+                prost_types::Value::from(300_u32),
+            );
+            assert_eq!(
+                prost_types::Value::from(RangedI16::<-5, 10>::MIN),
+                prost_types::Value::from(-5_i16),
+            );
+            assert_eq!(
+                prost_types::Value::from(OptionRangedU8::<5, 10>::Some(RangedU8::<5, 10>::MIN)),
+                prost_types::Value::from(5_u8),
+            );
+            let null = prost_types::Value::from(prost_types::value::Kind::NullValue(
+                prost_types::NullValue::NullValue as i32,
+            ));
+            assert_eq!(prost_types::Value::from(OptionRangedU8::<5, 10>::None), null);
+        }
+
         #[cfg(feature = "proptest")]
         #[test]
         fn proptest() {
