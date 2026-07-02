@@ -61,6 +61,7 @@ sqlx09 = { package = "sqlx", version = "0.9.0-alpha.1", optional = true, feature
 
 [dev-dependencies]
 arbitrary = "1.4.2"
+atomic = "0.6.1"
 rand08 = { package = "rand", version = "0.8.4" }
 rand09 = { package = "rand", version = "0.9.0" }
 rand010 = { package = "rand", version = "0.10.0" }

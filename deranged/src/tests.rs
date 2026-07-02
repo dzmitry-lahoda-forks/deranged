@@ -879,6 +879,27 @@ macro_rules! tests {
             assert_eq!(bytemuck::bytes_of(&optional), &[5]);
         }
 
+        #[cfg(feature = "bytemuck")]
+        #[test]
+        fn atomic_load_store() {
+            fn assert_atomic_load_store<T>(initial: T, next: T)
+            where
+                T: bytemuck::NoUninit + Copy + Eq + core::fmt::Debug,
+            {
+                let atomic = atomic::Atomic::new(initial);
+                assert_eq!(atomic.load(atomic::Ordering::Relaxed), initial);
+                atomic.store(next, atomic::Ordering::Relaxed);
+                assert_eq!(atomic.load(atomic::Ordering::Relaxed), next);
+            }
+
+            assert_atomic_load_store(RangedU8::<5, 10>::MIN, RangedU8::<5, 10>::MAX);
+            assert_atomic_load_store(RangedI16::<-5, 10>::MIN, RangedI16::<-5, 10>::MAX);
+            assert_atomic_load_store(
+                OptionRangedU8::<5, 10>::None,
+                OptionRangedU8::<5, 10>::Some(RangedU8::<5, 10>::MAX),
+            );
+        }
+
         #[cfg(feature = "proptest")]
         #[test]
         fn proptest() {
