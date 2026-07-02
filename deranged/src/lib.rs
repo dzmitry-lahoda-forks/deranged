@@ -130,6 +130,17 @@ impl ParseIntError {
     }
 }
 
+/// Copies a parse error from the primitive integer parser.
+///
+/// # Safety
+///
+/// `core::num::ParseIntError` and [`ParseIntError`] must have identical layouts.
+#[inline(always)]
+const unsafe fn copy_parse_int_error(error: &core::num::ParseIntError) -> ParseIntError {
+    // Safety: The caller guarantees that the source and destination error layouts match.
+    unsafe { core::mem::transmute_copy(error) }
+}
+
 impl fmt::Display for ParseIntError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -548,7 +559,7 @@ macro_rules! impl_ranged {
             )]
             /// ```
             #[inline]
-            pub fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
+            pub const fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
                 const { assert!(MIN <= MAX); }
                 match $internal::from_str_radix(src, radix) {
                     Ok(value) if value > MAX => {
@@ -560,7 +571,10 @@ macro_rules! impl_ranged {
                     // Safety: If the value was out of range, it would have been caught in a
                     // previous arm.
                     Ok(value) => Ok(unsafe { Self::new_unchecked(value) }),
-                    Err(e) => Err(ParseIntError { kind: e.kind().clone() }),
+                    Err(e) => {
+                        // Safety: The local error type mirrors the primitive parse error layout.
+                        Err(unsafe { copy_parse_int_error(&e) })
+                    }
                 }
             }
 

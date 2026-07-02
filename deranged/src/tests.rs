@@ -219,6 +219,12 @@ macro_rules! tests {
 
         #[test]
         fn from_str_radix() {$(
+            {
+                const PARSED: Result<$t<5, 10>, ParseIntError> =
+                    $t::<5, 10>::from_str_radix("A", 16);
+                assert_eq!(PARSED, Ok($t::<5, 10>::MAX));
+            }
+
             assert_eq!($t::<5, 10>::from_str_radix("10", 10), Ok($t::<5, 10>::MAX));
             assert_eq!($t::<5, 10>::from_str_radix("5", 10), Ok($t::<5, 10>::MIN));
             assert_eq!(
