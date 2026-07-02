@@ -1,6 +1,7 @@
 extern crate std;
 
 use core::hash::Hash;
+#[cfg(feature = "borsh_schema")]
 use core::mem::size_of;
 use std::format;
 use std::panic;
@@ -810,6 +811,34 @@ macro_rules! tests {
             assert_eq!(<$t<5, 10> as num_traits::Bounded>::min_value(), $t::<5, 10>::MIN);
             assert_eq!(<$t<5, 10> as num_traits::Bounded>::max_value(), $t::<5, 10>::MAX);
         )*}
+
+        #[cfg(feature = "proptest")]
+        #[test]
+        fn proptest() {
+            use proptest::strategy::{Strategy as _, ValueTree as _};
+
+            let mut runner = proptest::test_runner::TestRunner::default();
+
+            for _ in 0..100 {
+                $(
+                let val = proptest::arbitrary::any::<$t<5, 10>>()
+                    .new_tree(&mut runner)
+                    .expect("failed to create value tree")
+                    .current();
+                assert!(val >= $t::<5, 10>::MIN);
+                assert!(val <= $t::<5, 10>::MAX);
+
+                let val = proptest::arbitrary::any::<$opt<5, 10>>()
+                    .new_tree(&mut runner)
+                    .expect("failed to create value tree")
+                    .current();
+                if let Some(val) = val.get() {
+                    assert!(val >= $t::<5, 10>::MIN);
+                    assert!(val <= $t::<5, 10>::MAX);
+                }
+                )*
+            }
+        }
 
         #[cfg(feature = "quickcheck")]
         #[test]

@@ -2096,6 +2096,51 @@ macro_rules! impl_ranged {
             }
         }
 
+        #[cfg(feature = "proptest")]
+        impl<const MIN: $internal, const MAX: $internal> proptest::arbitrary::Arbitrary
+            for $type<MIN, MAX>
+        {
+            type Parameters = ();
+            type Strategy = proptest::strategy::Map<
+                core::ops::RangeInclusive<$internal>,
+                fn($internal) -> Self,
+            >;
+
+            #[inline]
+            fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+                const { assert!(MIN <= MAX); }
+                use proptest::strategy::Strategy as _;
+
+                (MIN..=MAX).prop_map(|value| {
+                    // Safety: The strategy only generates values in MIN..=MAX.
+                    unsafe { Self::new_unchecked(value) }
+                })
+            }
+        }
+
+        #[cfg(feature = "proptest")]
+        impl<
+            const MIN: $internal,
+            const MAX: $internal,
+        > proptest::arbitrary::Arbitrary for $optional_type<MIN, MAX> {
+            type Parameters = ();
+            type Strategy = proptest::strategy::Map<
+                proptest::option::OptionStrategy<
+                    <$type<MIN, MAX> as proptest::arbitrary::Arbitrary>::Strategy,
+                >,
+                fn(Option<$type<MIN, MAX>>) -> Self,
+            >;
+
+            #[inline]
+            fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+                const { assert!(MIN <= MAX); }
+                use proptest::strategy::Strategy as _;
+
+                proptest::option::of(proptest::arbitrary::any::<$type<MIN, MAX>>())
+                    .prop_map(Self::from)
+            }
+        }
+
         #[cfg(feature = "quickcheck")]
         impl<const MIN: $internal, const MAX: $internal> quickcheck::Arbitrary for $type<MIN, MAX> {
             #[inline]
