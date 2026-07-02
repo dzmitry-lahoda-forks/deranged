@@ -349,6 +349,13 @@ macro_rules! impl_ranged {
             // Safety: `MAX` is in range by definition.
             pub const MAX: Self = Self::new_static::<MAX>();
 
+            /// The range of values that can be represented by this type.
+            #[inline(always)]
+            pub const fn range() -> core::ops::RangeInclusive<$internal> {
+                const { assert!(MIN <= MAX); }
+                MIN..=MAX
+            }
+
             /// Creates a ranged integer without checking the value.
             ///
             /// # Safety

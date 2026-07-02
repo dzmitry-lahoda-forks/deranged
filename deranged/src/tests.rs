@@ -143,6 +143,15 @@ macro_rules! tests {
         )*}
 
         #[test]
+        fn range() {$(
+            assert_eq!($t::<5, 10>::range(), 5..=10);
+            assert!($t::<5, 10>::range().contains(&5));
+            assert!($t::<5, 10>::range().contains(&10));
+            assert!(!$t::<5, 10>::range().contains(&4));
+            assert!(!$t::<5, 10>::range().contains(&11));
+        )*}
+
+        #[test]
         fn new_static() {$(
             let six: $t::<5, 10> = $t::<5, 10>::new_static::<6>();
             assert_eq!(Some(six), $t::<5, 10>::new(6));
