@@ -3,6 +3,7 @@ extern crate std;
 use core::hash::Hash;
 #[cfg(feature = "borsh_schema")]
 use core::mem::size_of;
+use core::num::NonZeroU8;
 use std::format;
 use std::panic;
 use std::prelude::rust_2021::*;
@@ -37,6 +38,17 @@ macro_rules! if_unsigned {
     (unsigned $($x:tt)*) => { $($x)* };
 }
 
+fn parse_int_error(kind: IntErrorKind) -> ParseIntError {
+    match kind {
+        IntErrorKind::Empty => "".parse::<u8>().unwrap_err(),
+        IntErrorKind::InvalidDigit => "x".parse::<u8>().unwrap_err(),
+        IntErrorKind::PosOverflow => "256".parse::<u8>().unwrap_err(),
+        IntErrorKind::NegOverflow => "-129".parse::<i8>().unwrap_err(),
+        IntErrorKind::Zero => "0".parse::<NonZeroU8>().unwrap_err(),
+        _ => unreachable!("unexpected integer parse error kind"),
+    }
+}
+
 #[test]
 fn errors() {
     assert_eq!(
@@ -47,63 +59,35 @@ fn errors() {
     assert_eq!(format!("{TryFromIntError:?}"), "TryFromIntError");
 
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::Empty,
-        }
-        .to_string(),
+        parse_int_error(IntErrorKind::Empty).to_string(),
         "cannot parse integer from empty string"
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::InvalidDigit,
-        }
-        .to_string(),
+        parse_int_error(IntErrorKind::InvalidDigit).to_string(),
         "invalid digit found in string"
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::PosOverflow,
-        }
-        .to_string(),
+        parse_int_error(IntErrorKind::PosOverflow).to_string(),
         "number too large to fit in target type"
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::NegOverflow,
-        }
-        .to_string(),
+        parse_int_error(IntErrorKind::NegOverflow).to_string(),
         "number too small to fit in target type"
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::Zero,
-        }
-        .to_string(),
+        parse_int_error(IntErrorKind::Zero).to_string(),
         "number would be zero for non-zero type"
     );
     assert_eq!(
-        format!(
-            "{:?}",
-            ParseIntError {
-                kind: IntErrorKind::Empty
-            }
-        ),
+        format!("{:?}", parse_int_error(IntErrorKind::Empty)),
         "ParseIntError { kind: Empty }"
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::Empty
-        }
-        .clone(),
-        ParseIntError {
-            kind: IntErrorKind::Empty
-        }
+        parse_int_error(IntErrorKind::Empty).clone(),
+        parse_int_error(IntErrorKind::Empty)
     );
     assert_eq!(
-        ParseIntError {
-            kind: IntErrorKind::Empty
-        }
-        .kind(),
+        parse_int_error(IntErrorKind::Empty).kind(),
         &IntErrorKind::Empty
     );
 }
@@ -228,16 +212,16 @@ macro_rules! tests {
             assert_eq!($t::<5, 10>::from_str_radix("10", 10), Ok($t::<5, 10>::MAX));
             assert_eq!($t::<5, 10>::from_str_radix("5", 10), Ok($t::<5, 10>::MIN));
             assert_eq!(
-                $t::<5, 10>::from_str_radix("4", 10),
-                Err(ParseIntError { kind: IntErrorKind::NegOverflow }),
+                $t::<5, 10>::from_str_radix("4", 10).unwrap_err().kind(),
+                &IntErrorKind::NegOverflow,
             );
             assert_eq!(
-                $t::<5, 10>::from_str_radix("11", 10),
-                Err(ParseIntError { kind: IntErrorKind::PosOverflow }),
+                $t::<5, 10>::from_str_radix("11", 10).unwrap_err().kind(),
+                &IntErrorKind::PosOverflow,
             );
             assert_eq!(
-                $t::<5, 10>::from_str_radix("", 10),
-                Err(ParseIntError { kind: IntErrorKind::Empty }),
+                $t::<5, 10>::from_str_radix("", 10).unwrap_err().kind(),
+                &IntErrorKind::Empty,
             );
         )*}
 
@@ -642,9 +626,18 @@ macro_rules! tests {
 
             assert_eq!("10".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MAX));
             assert_eq!("5".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MIN));
-            assert_eq!("4".parse::<$t<5, 10>>(), Err(ParseIntError { kind: IntErrorKind::NegOverflow }));
-            assert_eq!("11".parse::<$t<5, 10>>(), Err(ParseIntError { kind: IntErrorKind::PosOverflow }));
-            assert_eq!("".parse::<$t<5, 10>>(), Err(ParseIntError { kind: IntErrorKind::Empty }));
+            assert_eq!(
+                "4".parse::<$t<5, 10>>().unwrap_err().kind(),
+                &IntErrorKind::NegOverflow,
+            );
+            assert_eq!(
+                "11".parse::<$t<5, 10>>().unwrap_err().kind(),
+                &IntErrorKind::PosOverflow,
+            );
+            assert_eq!(
+                "".parse::<$t<5, 10>>().unwrap_err().kind(),
+                &IntErrorKind::Empty,
+            );
         )*}
 
         #[cfg(feature = "serde")]
