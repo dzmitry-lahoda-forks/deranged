@@ -1,6 +1,7 @@
 extern crate std;
 
 use core::hash::Hash;
+use core::mem::size_of;
 use std::format;
 use std::panic;
 use std::prelude::rust_2021::*;
@@ -713,6 +714,27 @@ macro_rules! tests {
             assert!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>("-9007199254740992").is_err());
 
             Ok(())
+        }
+
+        #[cfg(feature = "borsh_schema")]
+        #[test]
+        fn borsh_schema() {
+            $(
+            let schema = borsh::schema::BorshSchemaContainer::for_type::<$t<5, 10>>();
+            let declaration = <$inner as borsh::BorshSchema>::declaration();
+            assert_eq!(schema.declaration(), &declaration);
+            assert_eq!(
+                schema.get_definition(&declaration),
+                Some(&borsh::schema::Definition::Primitive(size_of::<$inner>() as u8)),
+            );
+
+            let schema = borsh::schema::BorshSchemaContainer::for_type::<$opt<5, 10>>();
+            assert_eq!(schema.declaration(), &declaration);
+            assert_eq!(
+                schema.get_definition(&declaration),
+                Some(&borsh::schema::Definition::Primitive(size_of::<$inner>() as u8)),
+            );
+            )*
         }
 
         #[cfg(feature = "schemars")]

@@ -1735,6 +1735,8 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSerialize for $type<MIN, MAX> {
             #[inline(always)]
@@ -1744,6 +1746,8 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSerialize
             for $optional_type<MIN, MAX>
@@ -1755,6 +1759,8 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshDeserialize
             for $type<MIN, MAX>
@@ -1767,6 +1773,8 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshDeserialize
             for $optional_type<MIN, MAX>
@@ -1785,6 +1793,56 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
+        #[cfg(feature = "borsh_schema")]
+        impl<const MIN: $internal, const MAX: $internal> borsh::BorshSchema for $type<MIN, MAX> {
+            #[inline]
+            fn add_definitions_recursively(
+                definitions: &mut borsh::__private::maybestd::collections::BTreeMap<
+                    borsh::schema::Declaration,
+                    borsh::schema::Definition,
+                >,
+            ) {
+                const { assert!(MIN <= MAX); }
+                <$internal as borsh::BorshSchema>::add_definitions_recursively(definitions);
+            }
+
+            #[inline]
+            fn declaration() -> borsh::schema::Declaration {
+                const { assert!(MIN <= MAX); }
+                <$internal as borsh::BorshSchema>::declaration()
+            }
+        }
+
+        /// Pure binary le transparent to underlying type
+        /// (no byte reduction based on niche value optimization)
+        #[cfg(feature = "borsh_schema")]
+        impl<const MIN: $internal, const MAX: $internal> borsh::BorshSchema
+            for $optional_type<MIN, MAX>
+        {
+            #[inline]
+            fn add_definitions_recursively(
+                definitions: &mut borsh::__private::maybestd::collections::BTreeMap<
+                    borsh::schema::Declaration,
+                    borsh::schema::Definition,
+                >,
+            ) {
+                const { assert!(MIN <= MAX); }
+                <$internal as borsh::BorshSchema>::add_definitions_recursively(definitions);
+            }
+
+            #[inline]
+            fn declaration() -> borsh::schema::Declaration {
+                const { assert!(MIN <= MAX); }
+                <$internal as borsh::BorshSchema>::declaration()
+            }
+        }
+
+        /// If MIN and MAX within safe JSON integer range, then schema is integer with min/max,
+        /// otherwise string with pattern and max length.
+        ///
+        /// Deseralizer so supports both integer and string if they fit into range.
         #[cfg(feature = "schemars")]
         impl<
             const MIN: $internal,

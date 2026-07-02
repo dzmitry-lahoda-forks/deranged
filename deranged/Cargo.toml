@@ -12,9 +12,10 @@ description = "Ranged integers"
 include = ["src/**/*", "LICENSE-*", "README.md"]
 
 [features]
-default = []
+default = ["borsh", "serde", "schemars", "sqlx09", "borsh_schema"]
 alloc = []
 borsh = ["dep:borsh"]
+borsh_schema = ["borsh", "borsh/unstable__schema"]
 macros = ["dep:deranged-macros"]
 num = ["dep:num-traits"]
 powerfmt = ["dep:powerfmt"]
