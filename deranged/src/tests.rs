@@ -635,6 +635,11 @@ macro_rules! tests {
 
         #[test]
         fn from_str() {$(
+            {
+                const PARSED: Result<$t<5, 10>, ParseIntError> = $t::<5, 10>::parse("10");
+                assert_eq!(PARSED, Ok($t::<5, 10>::MAX));
+            }
+
             assert_eq!("10".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MAX));
             assert_eq!("5".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MIN));
             assert_eq!("4".parse::<$t<5, 10>>(), Err(ParseIntError { kind: IntErrorKind::NegOverflow }));
