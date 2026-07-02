@@ -2,6 +2,7 @@ extern crate std;
 
 use core::hash::Hash;
 use std::format;
+use std::panic;
 use std::prelude::rust_2021::*;
 
 use crate::{
@@ -656,6 +657,86 @@ macro_rules! tests {
             assert!(serde_json::from_str::<$opt<5, 10>>("4").is_err());
             assert!(serde_json::from_str::<$opt<5, 10>>("11").is_err());
             )*
+            Ok(())
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn serde_json_safe_integer_ranges() -> serde_json::Result<()> {
+            assert_eq!(
+                serde_json::to_string(&RangedU64::<0, 9_007_199_254_740_991>::MAX)?,
+                "9007199254740991",
+            );
+            assert_eq!(
+                serde_json::to_string(&RangedI64::<-9_007_199_254_740_991, 0>::MIN)?,
+                "-9007199254740991",
+            );
+            assert_eq!(
+                serde_json::from_str::<RangedU64<0, 9_007_199_254_740_991>>(
+                    "\"9007199254740991\""
+                )?,
+                RangedU64::<0, 9_007_199_254_740_991>::MAX,
+            );
+            assert_eq!(
+                serde_json::from_str::<RangedI64<-9_007_199_254_740_991, 0>>(
+                    "\"-9007199254740991\""
+                )?,
+                RangedI64::<-9_007_199_254_740_991, 0>::MIN,
+            );
+
+            let value = RangedU64::<0, 9_007_199_254_740_992>::MAX;
+            let serialized = serde_json::to_string(&value)?;
+            assert_eq!(serialized, "\"9007199254740992\"");
+            assert_eq!(serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>(&serialized)?, value);
+            assert!(serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>("9007199254740992").is_err());
+
+            assert_eq!(
+                serde_json::to_string(&OptionRangedU64::<0, 9_007_199_254_740_992>::None)?,
+                "null",
+            );
+            let value = OptionRangedU64::<0, 9_007_199_254_740_992>::Some(value);
+            let serialized = serde_json::to_string(&value)?;
+            assert_eq!(serialized, "\"9007199254740992\"");
+            assert_eq!(
+                serde_json::from_str::<OptionRangedU64<0, 9_007_199_254_740_992>>(&serialized)?,
+                value,
+            );
+            assert!(serde_json::from_str::<OptionRangedU64<0, 9_007_199_254_740_992>>(
+                "9007199254740992"
+            )
+            .is_err());
+
+            let value = RangedI64::<-9_007_199_254_740_992, 0>::MIN;
+            let serialized = serde_json::to_string(&value)?;
+            assert_eq!(serialized, "\"-9007199254740992\"");
+            assert_eq!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>(&serialized)?, value);
+            assert!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>("-9007199254740992").is_err());
+
+            Ok(())
+        }
+
+        #[cfg(feature = "schemars")]
+        #[test]
+        fn schemars_json_safe_integer_ranges() -> serde_json::Result<()> {
+            let schema =
+                serde_json::to_value(schemars::schema_for!(RangedU64<0, 9_007_199_254_740_991>))?;
+            assert_eq!(schema["type"], "integer");
+            assert_eq!(schema["minimum"], 0);
+            assert_eq!(schema["maximum"], 9_007_199_254_740_991_u64);
+
+            let schema =
+                serde_json::to_value(schemars::schema_for!(RangedU64<0, 9_007_199_254_740_992>))?;
+            assert_eq!(schema["type"], "string");
+            assert_eq!(schema["minLength"], 1);
+            assert_eq!(schema["maxLength"], 16);
+            assert_eq!(schema["pattern"], "^(?:0|[1-9][0-9]*)$");
+
+            let schema =
+                serde_json::to_value(schemars::schema_for!(RangedI64<-9_007_199_254_740_992, 0>))?;
+            assert_eq!(schema["type"], "string");
+            assert_eq!(schema["maxLength"], 17);
+            assert_eq!(schema["pattern"], "^-?(?:0|[1-9][0-9]*)$");
+
             Ok(())
         }
 

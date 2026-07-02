@@ -169,6 +169,40 @@ macro_rules! if_unsigned {
     (false $($x:tt)*) => { $($x)* };
 }
 
+/// The smallest JSON integer that is safe for Web clients.
+#[cfg(any(feature = "serde", feature = "schemars"))]
+const JSON_SAFE_SIGNED_INTEGER_MIN: i128 = -9_007_199_254_740_991;
+
+/// The largest JSON integer that is safe for Web clients.
+#[cfg(any(feature = "serde", feature = "schemars"))]
+const JSON_SAFE_SIGNED_INTEGER_MAX: i128 = 9_007_199_254_740_991;
+
+/// The largest unsigned JSON integer that is safe for Web clients.
+#[cfg(any(feature = "serde", feature = "schemars"))]
+const JSON_SAFE_UNSIGNED_INTEGER_MAX: u128 = 9_007_199_254_740_991;
+
+/// Whether a signed range is within Web JSON's safe integer range.
+#[cfg(any(feature = "serde", feature = "schemars"))]
+#[inline(always)]
+const fn signed_json_safe_integer_range(min: i128, max: i128) -> bool {
+    min >= JSON_SAFE_SIGNED_INTEGER_MIN && max <= JSON_SAFE_SIGNED_INTEGER_MAX
+}
+
+/// Whether an unsigned range is within Web JSON's safe integer range.
+#[cfg(any(feature = "serde", feature = "schemars"))]
+#[inline(always)]
+const fn unsigned_json_safe_integer_range(max: u128) -> bool {
+    max <= JSON_SAFE_UNSIGNED_INTEGER_MAX
+}
+
+/// The string pattern for a JSON integer.
+#[cfg(feature = "schemars")]
+const JSON_SIGNED_INTEGER_PATTERN: &str = "^-?(?:0|[1-9][0-9]*)$";
+
+/// The string pattern for an unsigned JSON integer.
+#[cfg(feature = "schemars")]
+const JSON_UNSIGNED_INTEGER_PATTERN: &str = "^(?:0|[1-9][0-9]*)$";
+
 /// `"A"` if `true`, `"An"` if `false`.
 macro_rules! article {
     (true) => {
@@ -1570,16 +1604,31 @@ macro_rules! impl_ranged {
             }
         })+
 
+        /// If value type is in safe integer range of JSON numbers,
+        /// serialize as number, otherwise serialize as string.
         #[cfg(feature = "serde")]
         impl<const MIN: $internal, const MAX: $internal> serde_core::Serialize for $type<MIN, MAX> {
             #[inline(always)]
             fn serialize<S: serde_core::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>
             {
                 const { assert!(MIN <= MAX); }
-                self.get().serialize(serializer)
+                #[allow(trivial_numeric_casts)]
+                let json_safe_integer_range = if $is_signed {
+                    signed_json_safe_integer_range(MIN as i128, MAX as i128)
+                } else {
+                    unsigned_json_safe_integer_range(MAX as u128)
+                };
+
+                if json_safe_integer_range {
+                    self.get().serialize(serializer)
+                } else {
+                    serializer.collect_str(&self.get())
+                }
             }
         }
 
+        /// If value type is in safe integer range of JSON numbers,
+        /// serialize as number, otherwise serialize as string.
         #[cfg(feature = "serde")]
         impl<
             const MIN: $internal,
@@ -1593,6 +1642,7 @@ macro_rules! impl_ranged {
             }
         }
 
+        /// Deserialize string or number.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1604,21 +1654,72 @@ macro_rules! impl_ranged {
                 -> Result<Self, D::Error>
             {
                 const { assert!(MIN <= MAX); }
-                let internal = <$internal>::deserialize(deserializer)?;
-                Self::new(internal).ok_or_else(||
-                    <D::Error as serde_core::de::Error>::invalid_value(
-                        serde_core::de::Unexpected::Other("integer"),
-                        #[cfg(feature = "alloc")] {
-                            &alloc::format!("an integer in the range {}..={}", MIN, MAX).as_ref()
-                        },
-                        #[cfg(not(feature = "alloc"))] {
-                            &"an integer in the valid range"
+
+                struct Visitor<const MIN: $internal, const MAX: $internal>;
+
+                impl<const MIN: $internal, const MAX: $internal> serde_core::de::Visitor<'_>
+                for Visitor<MIN, MAX> {
+                    type Value = $type<MIN, MAX>;
+
+                    #[inline]
+                    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        #[cfg(feature = "alloc")]
+                        {
+                            write!(formatter, "an integer or integer string in the range {}..={}", MIN, MAX)
                         }
-                    )
-                )
+                        #[cfg(not(feature = "alloc"))]
+                        {
+                            formatter.write_str("an integer or integer string in the valid range")
+                        }
+                    }
+
+                    #[inline]
+                    fn visit_str<E: serde_core::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                        let internal = value.parse::<$internal>().map_err(|_| {
+                            E::invalid_value(serde_core::de::Unexpected::Str(value), &self)
+                        })?;
+                        Self::Value::new(internal).ok_or_else(|| {
+                            E::invalid_value(serde_core::de::Unexpected::Str(value), &self)
+                        })
+                    }
+
+                    #[inline]
+                    fn visit_i64<E: serde_core::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                        let internal = <$internal>::try_from(value).map_err(|_| {
+                            E::invalid_value(serde_core::de::Unexpected::Signed(value), &self)
+                        })?;
+                        Self::Value::new(internal).ok_or_else(|| {
+                            E::invalid_value(serde_core::de::Unexpected::Signed(value), &self)
+                        })
+                    }
+
+                    #[inline]
+                    fn visit_u64<E: serde_core::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                        let internal = <$internal>::try_from(value).map_err(|_| {
+                            E::invalid_value(serde_core::de::Unexpected::Unsigned(value), &self)
+                        })?;
+                        Self::Value::new(internal).ok_or_else(|| {
+                            E::invalid_value(serde_core::de::Unexpected::Unsigned(value), &self)
+                        })
+                    }
+                }
+
+                #[allow(trivial_numeric_casts)]
+                let json_safe_integer_range = if $is_signed {
+                    signed_json_safe_integer_range(MIN as i128, MAX as i128)
+                } else {
+                    unsigned_json_safe_integer_range(MAX as u128)
+                };
+
+                if json_safe_integer_range {
+                    deserializer.deserialize_any(Visitor::<MIN, MAX>)
+                } else {
+                    deserializer.deserialize_str(Visitor::<MIN, MAX>)
+                }
             }
         }
 
+        /// Deserialize string or integer number.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1701,17 +1802,49 @@ macro_rules! impl_ranged {
             fn json_schema(
                 _generator: &mut schemars::SchemaGenerator
             ) -> schemars::Schema {
-                let mut schema = schemars::json_schema!({
-                    "type": "integer",
-                });
+                #[allow(trivial_numeric_casts)]
+                let json_safe_integer_range = if $is_signed {
+                    signed_json_safe_integer_range(MIN as i128, MAX as i128)
+                } else {
+                    unsigned_json_safe_integer_range(MAX as u128)
+                };
 
-                if let Ok(minimum) = schemars::_private::serde_json::to_value(MIN) {
-                    schema.insert("minimum".into(), minimum);
-                }
+                let schema = if json_safe_integer_range {
+                    let mut schema = schemars::json_schema!({
+                        "type": "integer",
+                    });
 
-                if let Ok(maximum) = schemars::_private::serde_json::to_value(MAX) {
-                    schema.insert("maximum".into(), maximum);
-                }
+                    if let Ok(minimum) = schemars::_private::serde_json::to_value(MIN) {
+                        schema.insert("minimum".into(), minimum);
+                    }
+
+                    if let Ok(maximum) = schemars::_private::serde_json::to_value(MAX) {
+                        schema.insert("maximum".into(), maximum);
+                    }
+
+                    schema
+                } else {
+                    let maximum_length = usize::max(
+                        alloc::string::ToString::to_string(&MIN).len(),
+                        alloc::string::ToString::to_string(&MAX).len(),
+                    );
+                    let mut schema = schemars::json_schema!({
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": if $is_signed {
+                            JSON_SIGNED_INTEGER_PATTERN
+                        } else {
+                            JSON_UNSIGNED_INTEGER_PATTERN
+                        },
+                    });
+
+                    if let Ok(max_length) = schemars::_private::serde_json::to_value(maximum_length)
+                    {
+                        schema.insert("maxLength".into(), max_length);
+                    }
+
+                    schema
+                };
 
                 schema
             }
