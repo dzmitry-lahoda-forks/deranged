@@ -812,6 +812,34 @@ macro_rules! tests {
             assert_eq!(<$t<5, 10> as num_traits::Bounded>::max_value(), $t::<5, 10>::MAX);
         )*}
 
+        #[cfg(feature = "arbitrary")]
+        #[test]
+        fn arbitrary() {
+            use arbitrary::Arbitrary as _;
+
+            const INPUTS: &[&[u8]] = &[
+                &[0; 64],
+                &[255; 64],
+                b"deranged arbitrary fuzz input for ranged integers",
+            ];
+
+            for input in INPUTS {
+                $(
+                let mut u = arbitrary::Unstructured::new(input);
+                let val = $t::<5, 10>::arbitrary(&mut u).expect("failed to generate value");
+                assert!(val >= $t::<5, 10>::MIN);
+                assert!(val <= $t::<5, 10>::MAX);
+
+                let mut u = arbitrary::Unstructured::new(input);
+                let val = $opt::<5, 10>::arbitrary(&mut u).expect("failed to generate value");
+                if let Some(val) = val.get() {
+                    assert!(val >= $t::<5, 10>::MIN);
+                    assert!(val <= $t::<5, 10>::MAX);
+                }
+                )*
+            }
+        }
+
         #[cfg(feature = "proptest")]
         #[test]
         fn proptest() {

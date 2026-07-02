@@ -2096,6 +2096,43 @@ macro_rules! impl_ranged {
             }
         }
 
+        #[cfg(feature = "arbitrary")]
+        impl<'a, const MIN: $internal, const MAX: $internal> arbitrary::Arbitrary<'a>
+            for $type<MIN, MAX>
+        {
+            #[inline]
+            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                const { assert!(MIN <= MAX); }
+                let value = u.int_in_range(MIN..=MAX)?;
+
+                // Safety: `int_in_range` only generates values in MIN..=MAX.
+                Ok(unsafe { Self::new_unchecked(value) })
+            }
+
+            #[inline]
+            fn size_hint(depth: usize) -> (usize, Option<usize>) {
+                <$internal as arbitrary::Arbitrary<'a>>::size_hint(depth)
+            }
+        }
+
+        #[cfg(feature = "arbitrary")]
+        impl<
+            'a,
+            const MIN: $internal,
+            const MAX: $internal,
+        > arbitrary::Arbitrary<'a> for $optional_type<MIN, MAX> {
+            #[inline]
+            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                const { assert!(MIN <= MAX); }
+                Option::<$type<MIN, MAX>>::arbitrary(u).map(Self::from)
+            }
+
+            #[inline]
+            fn size_hint(depth: usize) -> (usize, Option<usize>) {
+                Option::<$type<MIN, MAX>>::size_hint(depth)
+            }
+        }
+
         #[cfg(feature = "proptest")]
         impl<const MIN: $internal, const MAX: $internal> proptest::arbitrary::Arbitrary
             for $type<MIN, MAX>
