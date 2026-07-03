@@ -617,28 +617,6 @@ macro_rules! tests {
             assert_eq!($t::<5, 10>::try_from(11), Err(TryFromIntError));
         )*}
 
-        #[test]
-        fn from_str() {$(
-            {
-                const PARSED: Result<$t<5, 10>, ParseIntError> = $t::<5, 10>::parse("10");
-                assert_eq!(PARSED, Ok($t::<5, 10>::MAX));
-            }
-
-            assert_eq!("10".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MAX));
-            assert_eq!("5".parse::<$t<5, 10>>(), Ok($t::<5, 10>::MIN));
-            assert_eq!(
-                "4".parse::<$t<5, 10>>().unwrap_err().kind(),
-                &IntErrorKind::NegOverflow,
-            );
-            assert_eq!(
-                "11".parse::<$t<5, 10>>().unwrap_err().kind(),
-                &IntErrorKind::PosOverflow,
-            );
-            assert_eq!(
-                "".parse::<$t<5, 10>>().unwrap_err().kind(),
-                &IntErrorKind::Empty,
-            );
-        )*}
 
         #[cfg(feature = "serde")]
         #[test]

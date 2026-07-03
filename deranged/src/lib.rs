@@ -103,6 +103,9 @@ impl Error for TryFromIntError {}
 /// # Safety
 ///
 /// `core::num::ParseIntError` must have the same layout as `core::num::IntErrorKind`.
+/// 
+/// Reason `ParseIntError`` is not copy is that on version up to 1.44 ParseIntError
+/// had ref return of source and cause which are str, potentially stored in struct.
 #[inline(always)]
 const unsafe fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
     // Safety: The caller guarantees that the source and destination error layouts match.
@@ -116,46 +119,6 @@ macro_rules! const_try_opt {
             Some(value) => value,
             None => return None,
         }
-    };
-}
-
-/// Parse a decimal integer in a `const` context.
-macro_rules! const_parse_int {
-    (i8, $src:expr) => {
-        konst::primitive::parse_i8($src)
-    };
-    (i16, $src:expr) => {
-        konst::primitive::parse_i16($src)
-    };
-    (i32, $src:expr) => {
-        konst::primitive::parse_i32($src)
-    };
-    (i64, $src:expr) => {
-        konst::primitive::parse_i64($src)
-    };
-    (i128, $src:expr) => {
-        konst::primitive::parse_i128($src)
-    };
-    (isize, $src:expr) => {
-        konst::primitive::parse_isize($src)
-    };
-    (u8, $src:expr) => {
-        konst::primitive::parse_u8($src)
-    };
-    (u16, $src:expr) => {
-        konst::primitive::parse_u16($src)
-    };
-    (u32, $src:expr) => {
-        konst::primitive::parse_u32($src)
-    };
-    (u64, $src:expr) => {
-        konst::primitive::parse_u64($src)
-    };
-    (u128, $src:expr) => {
-        konst::primitive::parse_u128($src)
-    };
-    (usize, $src:expr) => {
-        konst::primitive::parse_usize($src)
     };
 }
 
@@ -536,30 +499,6 @@ macro_rules! impl_ranged {
                 }
                 // Safety: The caller must ensure that the value is in the new range.
                 unsafe { $type::new_unchecked(self.get()) }
-            }
-
-            /// Converts a string slice to an integer.
-            ///
-            /// The string is expected to be an optional `+` or `-` sign followed by decimal
-            /// digits. Leading and trailing whitespace represent an error.
-            #[inline]
-            pub const fn parse(src: &str) -> Result<Self, ParseIntError> {
-                const { assert!(MIN <= MAX); }
-
-                match const_parse_int!($internal, src) {
-                    Ok(value) if value > MAX => {
-                        // Safety: `ParseIntError` stores an `IntErrorKind`.
-                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::PosOverflow) })
-                    }
-                    Ok(value) if value < MIN => {
-                        // Safety: `ParseIntError` stores an `IntErrorKind`.
-                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::NegOverflow) })
-                    }
-                    // Safety: If the value was out of range, it would have been caught in a
-                    // previous arm.
-                    Ok(value) => Ok(unsafe { Self::new_unchecked(value) }),
-                    Err(_) => Self::from_str_radix(src, 10),
-                }
             }
 
             /// Converts a string slice in a given base to an integer.
@@ -1572,7 +1511,7 @@ macro_rules! impl_ranged {
 
             #[inline]
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                $type::<MIN, MAX>::parse(s)
+                $type::<MIN, MAX>::from_str_radix(s, 10)
             }
         }
 
