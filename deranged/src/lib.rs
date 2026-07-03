@@ -25,6 +25,7 @@ use core::cmp::Ordering;
 use core::error::Error;
 use core::fmt;
 use core::hint::assert_unchecked;
+use core::mem::{align_of, size_of};
 use core::num::NonZero;
 use core::str::FromStr;
 
@@ -99,18 +100,60 @@ impl fmt::Display for TryFromIntError {
 impl Error for TryFromIntError {}
 
 /// Constructs a primitive parse error with the provided kind.
-///
-/// # Safety
-///
-/// `core::num::ParseIntError` must have the same layout as `core::num::IntErrorKind`.
-/// 
-/// Reason `ParseIntError`` is not copy is that on version up to 1.44 ParseIntError
-/// had ref return of source and cause which are str, potentially stored in struct.
 #[inline(always)]
-const unsafe fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
+const fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
     // Safety: The caller guarantees that the source and destination error layouts match.
     unsafe { core::mem::transmute_copy(&kind) }
 }
+
+const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: IntErrorKind) {
+    let Err(error) = result else {
+        panic!("expected parse error")
+    };
+    let expected = parse_int_error_from_kind(expected);
+    let actual_bytes: [u8; size_of::<ParseIntError>()] =
+        unsafe { core::mem::transmute_copy(&error) };
+    let expected_bytes: [u8; size_of::<ParseIntError>()] =
+        unsafe { core::mem::transmute_copy(&expected) };
+    let mut index = 0;
+    while index < size_of::<ParseIntError>() {
+        assert!(
+            actual_bytes[index] == expected_bytes[index],
+            "unsupported version of rust std/compiler"
+        );
+        index += 1;
+    }
+}
+
+/// `core::num::ParseIntError` must have the same layout as `core::num::IntErrorKind`.
+///
+/// `ParseIntError` is not copy because, up to Rust 1.44, `source` and `cause`
+/// returned a `str` reference that may have been stored in the struct.
+/// 
+/// Also there are several attempts to open this error,
+/// in general peopl are not agains.
+const _: () = {
+    assert!(
+        size_of::<ParseIntError>() == size_of::<IntErrorKind>(),
+        "unsupported version of rust std/compiler"
+    );
+    assert!(
+        align_of::<ParseIntError>() == align_of::<IntErrorKind>(),
+        "unsupported version of rust std/compiler"
+    );
+
+    assert_error_kind(u8::from_str_radix("", 10), IntErrorKind::Empty);
+    assert_error_kind(i32::from_str_radix(":>", 10), IntErrorKind::InvalidDigit);
+    assert_error_kind(u8::from_str_radix("256", 10), IntErrorKind::PosOverflow);
+    assert_error_kind(i8::from_str_radix("-129", 10), IntErrorKind::NegOverflow);
+    // assert_error_kind!(
+    //     // The real parser source for this is `NonZero::<u8>::from_str_radix("0", 10)`,
+    //     // but that is not stable as a const fn yet.
+    //     NonZero::<u8>::from_str_radix("0", 10),
+    //     IntErrorKind::Zero,
+    //     "expected zero parse error layout"
+    // );
+};
 
 /// `?` for `Option` types, usable in `const` contexts.
 macro_rules! const_try_opt {
@@ -535,11 +578,11 @@ macro_rules! impl_ranged {
                 match $internal::from_str_radix(src, radix) {
                     Ok(value) if value > MAX => {
                         // Safety: `ParseIntError` stores an `IntErrorKind`.
-                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::PosOverflow) })
+                        Err(parse_int_error_from_kind(IntErrorKind::PosOverflow))
                     }
                     Ok(value) if value < MIN => {
                         // Safety: `ParseIntError` stores an `IntErrorKind`.
-                        Err(unsafe { parse_int_error_from_kind(IntErrorKind::NegOverflow) })
+                        Err(parse_int_error_from_kind(IntErrorKind::NegOverflow))
                     }
                     // Safety: If the value was out of range, it would have been caught in a
                     // previous arm.
@@ -1584,8 +1627,8 @@ macro_rules! impl_ranged {
             }
         })+
 
-        /// If value type is in safe integer range of JSON numbers,
-        /// serialize as number, otherwise serialize as string.
+        /// Serialize as an integer when the whole range is within JSON's safe integer range,
+        /// otherwise serialize as an integer string.
         #[cfg(feature = "serde")]
         impl<const MIN: $internal, const MAX: $internal> serde_core::Serialize for $type<MIN, MAX> {
             #[inline(always)]
@@ -1607,8 +1650,8 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// If value type is in safe integer range of JSON numbers,
-        /// serialize as number, otherwise serialize as string.
+        /// Serialize as an integer when the whole range is within JSON's safe integer range,
+        /// otherwise serialize as an integer string.
         #[cfg(feature = "serde")]
         impl<
             const MIN: $internal,
@@ -1622,7 +1665,12 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Deserialize string or number.
+        /// Deserialize an integer string or integer number.
+        ///
+        /// Human-readable formats accept both strings and numbers. Numeric input must be in JSON's
+        /// safe integer range before the ranged bounds are checked. Non-human-readable formats use
+        /// the serialized representation: safe ranges deserialize as primitive integers, and
+        /// unsafe ranges deserialize as strings.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1665,6 +1713,12 @@ macro_rules! impl_ranged {
 
                     #[inline]
                     fn visit_i64<E: serde_core::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                        if !signed_json_safe_integer_range(value as i128, value as i128) {
+                            return Err(E::invalid_value(
+                                serde_core::de::Unexpected::Signed(value),
+                                &self,
+                            ));
+                        }
                         let internal = <$internal>::try_from(value).map_err(|_| {
                             E::invalid_value(serde_core::de::Unexpected::Signed(value), &self)
                         })?;
@@ -1675,6 +1729,12 @@ macro_rules! impl_ranged {
 
                     #[inline]
                     fn visit_u64<E: serde_core::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                        if !unsigned_json_safe_integer_range(value as u128) {
+                            return Err(E::invalid_value(
+                                serde_core::de::Unexpected::Unsigned(value),
+                                &self,
+                            ));
+                        }
                         let internal = <$internal>::try_from(value).map_err(|_| {
                             E::invalid_value(serde_core::de::Unexpected::Unsigned(value), &self)
                         })?;
@@ -1691,15 +1751,19 @@ macro_rules! impl_ranged {
                     unsigned_json_safe_integer_range(MAX as u128)
                 };
 
-                if json_safe_integer_range {
+                if deserializer.is_human_readable() {
                     deserializer.deserialize_any(Visitor::<MIN, MAX>)
+                } else if json_safe_integer_range {
+                    let internal = <$internal>::deserialize(deserializer)?;
+                    Self::new(internal)
+                        .ok_or_else(|| serde_core::de::Error::custom("integer out of range"))
                 } else {
                     deserializer.deserialize_str(Visitor::<MIN, MAX>)
                 }
             }
         }
 
-        /// Deserialize string or integer number.
+        /// Deserialize an integer string or integer number.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1819,10 +1883,12 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// If MIN and MAX within safe JSON integer range, then schema is integer with min/max,
+        /// If MIN and MAX are within the safe JSON integer range, then schema is integer with min/max,
         /// otherwise string with pattern and max length.
         ///
-        /// Deseralizer so supports both integer and string if they fit into range.
+        /// This schema describes the serialized JSON shape. Deserialization intentionally accepts a
+        /// wider human-readable input shape: integer strings or JSON-safe integer numbers, provided
+        /// they fit the ranged bounds.
         #[cfg(feature = "schemars")]
         impl<
             const MIN: $internal,

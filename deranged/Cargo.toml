@@ -12,7 +12,7 @@ description = "Ranged integers"
 include = ["src/**/*", "LICENSE-*", "README.md"]
 
 [features]
-default = [] # no defaults
+default = []
 alloc = []
 arbitrary = ["dep:arbitrary"]
 bytemuck = ["dep:bytemuck"]
