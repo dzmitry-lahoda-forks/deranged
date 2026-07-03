@@ -10,7 +10,7 @@
     any(
         feature = "serde",
         feature = "quickcheck",
-        feature = "sqlx09",
+        feature = "sqlx09-pg",
         feature = "schemars"
     )
 ))]
@@ -1921,7 +1921,7 @@ macro_rules! impl_ranged {
         )?
 
         $(
-        #[cfg(feature = "sqlx09")]
+        #[cfg(feature = "sqlx09-pg")]
         impl<const MIN: $internal, const MAX: $internal> sqlx09::Type<sqlx09::Postgres>
             for $type<MIN, MAX>
         {
@@ -1931,7 +1931,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        #[cfg(feature = "sqlx09")]
+        #[cfg(feature = "sqlx09-pg")]
         impl<const MIN: $internal, const MAX: $internal> sqlx09::postgres::PgHasArrayType
             for $type<MIN, MAX>
         {
@@ -1941,7 +1941,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        #[cfg(feature = "sqlx09")]
+        #[cfg(feature = "sqlx09-pg")]
         impl<const MIN: $internal, const MAX: $internal>
             sqlx09::Encode<'_, sqlx09::Postgres> for $type<MIN, MAX>
         {
@@ -1974,7 +1974,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        #[cfg(feature = "sqlx09")]
+        #[cfg(feature = "sqlx09-pg")]
         impl<'r, const MIN: $internal, const MAX: $internal>
             sqlx09::Decode<'r, sqlx09::Postgres> for $type<MIN, MAX>
         {
@@ -2277,7 +2277,7 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: u16
-        sqlx: i32
+        sqlx: i16
     }
     RangedU32 {
         mod_name: ranged_u32
@@ -2301,7 +2301,7 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: u32
-        sqlx: i64
+        sqlx: i32
     }
     RangedU64 {
         mod_name: ranged_u64
@@ -2323,7 +2323,8 @@ impl_ranged! {
             RangedI64(i64)
             RangedI128(i128)
             RangedIsize(isize)
-        ]        
+        ]
+        sqlx: i64
     }
     RangedU128 {
         mod_name: ranged_u128
@@ -2512,7 +2513,7 @@ impl_ranged! {
     }
 }
 
-#[cfg(feature = "sqlx09")]
+#[cfg(feature = "sqlx09-pg")]
 impl<const MIN: u128, const MAX: u128> sqlx09::Type<sqlx09::Postgres> for RangedU128<MIN, MAX> {
     #[inline]
     fn type_info() -> sqlx09::postgres::PgTypeInfo {
@@ -2520,7 +2521,7 @@ impl<const MIN: u128, const MAX: u128> sqlx09::Type<sqlx09::Postgres> for Ranged
     }
 }
 
-#[cfg(feature = "sqlx09")]
+#[cfg(feature = "sqlx09-pg")]
 impl<const MIN: u128, const MAX: u128> sqlx09::postgres::PgHasArrayType for RangedU128<MIN, MAX> {
     #[inline]
     fn array_type_info() -> sqlx09::postgres::PgTypeInfo {
@@ -2528,7 +2529,7 @@ impl<const MIN: u128, const MAX: u128> sqlx09::postgres::PgHasArrayType for Rang
     }
 }
 
-#[cfg(feature = "sqlx09")]
+#[cfg(feature = "sqlx09-pg")]
 impl<const MIN: u128, const MAX: u128> sqlx09::Encode<'_, sqlx09::Postgres>
     for RangedU128<MIN, MAX>
 {
@@ -2542,7 +2543,7 @@ impl<const MIN: u128, const MAX: u128> sqlx09::Encode<'_, sqlx09::Postgres>
     }
 }
 
-#[cfg(feature = "sqlx09")]
+#[cfg(feature = "sqlx09-pg")]
 impl<'r, const MIN: u128, const MAX: u128> sqlx09::Decode<'r, sqlx09::Postgres>
     for RangedU128<MIN, MAX>
 {
