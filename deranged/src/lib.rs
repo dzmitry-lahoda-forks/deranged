@@ -129,7 +129,7 @@ const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: 
 ///
 /// `ParseIntError` is not copy because, up to Rust 1.44, `source` and `cause`
 /// returned a `str` reference that may have been stored in the struct.
-/// 
+///
 /// Also there are several attempts to open this error,
 /// in general peopl are not agains.
 const _: () = {
@@ -1627,14 +1627,19 @@ macro_rules! impl_ranged {
             }
         })+
 
-        /// Serialize as an integer when the whole range is within JSON's safe integer range,
-        /// otherwise serialize as an integer string.
+        /// Non-human-readable formats serialize as the primitive integer. Human-readable formats
+        /// serialize as an integer when the whole range is within JSON's safe integer range,
+        /// otherwise as an integer string.
         #[cfg(feature = "serde")]
         impl<const MIN: $internal, const MAX: $internal> serde_core::Serialize for $type<MIN, MAX> {
             #[inline(always)]
             fn serialize<S: serde_core::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>
             {
                 const { assert!(MIN <= MAX); }
+                if !serializer.is_human_readable() {
+                    return self.get().serialize(serializer);
+                }
+
                 #[allow(trivial_numeric_casts)]
                 let json_safe_integer_range = if $is_signed {
                     signed_json_safe_integer_range(MIN as i128, MAX as i128)
@@ -1650,8 +1655,9 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Serialize as an integer when the whole range is within JSON's safe integer range,
-        /// otherwise serialize as an integer string.
+        /// Non-human-readable formats serialize as the primitive niche-encoded integer.
+        /// Human-readable formats serialize present values as an integer when the whole range is
+        /// within JSON's safe integer range, otherwise as an integer string.
         #[cfg(feature = "serde")]
         impl<
             const MIN: $internal,
@@ -1661,16 +1667,18 @@ macro_rules! impl_ranged {
             fn serialize<S: serde_core::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>
             {
                 const { assert!(MIN <= MAX); }
-                self.get().serialize(serializer)
+                if serializer.is_human_readable() {
+                    self.get().serialize(serializer)
+                } else {
+                    self.inner().serialize(serializer)
+                }
             }
         }
 
         /// Deserialize an integer string or integer number.
         ///
-        /// Human-readable formats accept both strings and numbers. Numeric input must be in JSON's
-        /// safe integer range before the ranged bounds are checked. Non-human-readable formats use
-        /// the serialized representation: safe ranges deserialize as primitive integers, and
-        /// unsafe ranges deserialize as strings.
+        /// Human-readable formats accept both strings and numbers, then check that the parsed value
+        /// fits the ranged bounds. Non-human-readable formats deserialize as primitive integers.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1713,12 +1721,6 @@ macro_rules! impl_ranged {
 
                     #[inline]
                     fn visit_i64<E: serde_core::de::Error>(self, value: i64) -> Result<Self::Value, E> {
-                        if !signed_json_safe_integer_range(value as i128, value as i128) {
-                            return Err(E::invalid_value(
-                                serde_core::de::Unexpected::Signed(value),
-                                &self,
-                            ));
-                        }
                         let internal = <$internal>::try_from(value).map_err(|_| {
                             E::invalid_value(serde_core::de::Unexpected::Signed(value), &self)
                         })?;
@@ -1729,12 +1731,6 @@ macro_rules! impl_ranged {
 
                     #[inline]
                     fn visit_u64<E: serde_core::de::Error>(self, value: u64) -> Result<Self::Value, E> {
-                        if !unsigned_json_safe_integer_range(value as u128) {
-                            return Err(E::invalid_value(
-                                serde_core::de::Unexpected::Unsigned(value),
-                                &self,
-                            ));
-                        }
                         let internal = <$internal>::try_from(value).map_err(|_| {
                             E::invalid_value(serde_core::de::Unexpected::Unsigned(value), &self)
                         })?;
@@ -1744,26 +1740,17 @@ macro_rules! impl_ranged {
                     }
                 }
 
-                #[allow(trivial_numeric_casts)]
-                let json_safe_integer_range = if $is_signed {
-                    signed_json_safe_integer_range(MIN as i128, MAX as i128)
-                } else {
-                    unsigned_json_safe_integer_range(MAX as u128)
-                };
-
                 if deserializer.is_human_readable() {
                     deserializer.deserialize_any(Visitor::<MIN, MAX>)
-                } else if json_safe_integer_range {
+                } else {
                     let internal = <$internal>::deserialize(deserializer)?;
                     Self::new(internal)
                         .ok_or_else(|| serde_core::de::Error::custom("integer out of range"))
-                } else {
-                    deserializer.deserialize_str(Visitor::<MIN, MAX>)
                 }
             }
         }
 
-        /// Deserialize an integer string or integer number.
+        /// Deserialize an integer string, integer number, or human-readable null.
         #[cfg(feature = "serde")]
         impl<
             'de,
@@ -1775,7 +1762,21 @@ macro_rules! impl_ranged {
                 -> Result<Self, D::Error>
             {
                 const { assert!(MIN <= MAX); }
-                Ok(Self::Some($type::<MIN, MAX>::deserialize(deserializer)?))
+                if deserializer.is_human_readable() {
+                    Ok(
+                        Option::<$type<MIN, MAX>>::deserialize(deserializer)?
+                            .map_or(Self::None, Self::Some),
+                    )
+                } else {
+                    let internal = <$internal>::deserialize(deserializer)?;
+                    if internal == Self::NICHE {
+                        Ok(Self::None)
+                    } else {
+                        $type::new(internal)
+                            .map(Self::Some)
+                            .ok_or_else(|| serde_core::de::Error::custom("integer out of range"))
+                    }
+                }
             }
         }
 
@@ -1887,8 +1888,8 @@ macro_rules! impl_ranged {
         /// otherwise string with pattern and max length.
         ///
         /// This schema describes the serialized JSON shape. Deserialization intentionally accepts a
-        /// wider human-readable input shape: integer strings or JSON-safe integer numbers, provided
-        /// they fit the ranged bounds.
+        /// wider human-readable input shape: integer strings or integer numbers, provided they fit
+        /// the ranged bounds.
         #[cfg(feature = "schemars")]
         impl<
             const MIN: $internal,
@@ -2050,7 +2051,7 @@ macro_rules! impl_ranged {
             ) -> Result<Self, alloc::boxed::Box<dyn core::error::Error + 'static + Send + Sync>> {
                 const { assert!(MIN <= MAX); }
                 // ideally we'd conditionally implement sqlx enc/dec based on
-                // range, but this is impossible so we panic at runtime instead.
+                // range, but this is possible only via type witness on stable (or on nightly).
                 assert!(
                     MIN as i128 >= <$sql_int>::MIN as i128,
                     concat!(stringify!($type), " minimum does not fit SQL storage type"),

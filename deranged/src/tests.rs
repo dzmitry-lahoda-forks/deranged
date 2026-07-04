@@ -645,6 +645,8 @@ macro_rules! tests {
             let val = $opt::<5, 10>::None;
             let serialized = serde_json::to_string(&val)?;
             assert_eq!(serialized, "null");
+            let deserialized: $opt<5, 10> = serde_json::from_str(&serialized)?;
+            assert_eq!(deserialized, val);
 
             assert!(serde_json::from_str::<$opt<5, 10>>("").is_err());
             assert!(serde_json::from_str::<$opt<5, 10>>("4").is_err());
@@ -677,33 +679,63 @@ macro_rules! tests {
                 RangedI64::<-9_007_199_254_740_991, 0>::MIN,
             );
 
-            let value = RangedU64::<0, 9_007_199_254_740_992>::MAX;
-            let serialized = serde_json::to_string(&value)?;
+            let max_value = RangedU64::<0, 9_007_199_254_740_992>::MAX;
+            let serialized = serde_json::to_string(&max_value)?;
             assert_eq!(serialized, "\"9007199254740992\"");
-            assert_eq!(serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>(&serialized)?, value);
-            assert!(serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>("9007199254740992").is_err());
+            assert_eq!(
+                serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>(&serialized)?,
+                max_value,
+            );
+            assert_eq!(
+                serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>("9007199254740992")?,
+                max_value,
+            );
+            assert!(serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>("9007199254740993").is_err());
+
+            let small_value = RangedU64::<0, 9_007_199_254_740_992>::new_static::<1>();
+            let serialized = serde_json::to_string(&small_value)?;
+            assert_eq!(serialized, "\"1\"");
+            assert_eq!(
+                serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>(&serialized)?,
+                small_value,
+            );
+            assert_eq!(
+                serde_json::from_str::<RangedU64<0, 9_007_199_254_740_992>>("1")?,
+                small_value,
+            );
 
             assert_eq!(
                 serde_json::to_string(&OptionRangedU64::<0, 9_007_199_254_740_992>::None)?,
                 "null",
             );
-            let value = OptionRangedU64::<0, 9_007_199_254_740_992>::Some(value);
+            let value = OptionRangedU64::<0, 9_007_199_254_740_992>::Some(max_value);
             let serialized = serde_json::to_string(&value)?;
             assert_eq!(serialized, "\"9007199254740992\"");
             assert_eq!(
                 serde_json::from_str::<OptionRangedU64<0, 9_007_199_254_740_992>>(&serialized)?,
                 value,
             );
-            assert!(serde_json::from_str::<OptionRangedU64<0, 9_007_199_254_740_992>>(
-                "9007199254740992"
-            )
-            .is_err());
+            assert_eq!(
+                serde_json::from_str::<OptionRangedU64<0, 9_007_199_254_740_992>>(
+                    "9007199254740992"
+                )?,
+                value,
+            );
 
             let value = RangedI64::<-9_007_199_254_740_992, 0>::MIN;
             let serialized = serde_json::to_string(&value)?;
             assert_eq!(serialized, "\"-9007199254740992\"");
             assert_eq!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>(&serialized)?, value);
-            assert!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>("-9007199254740992").is_err());
+            assert_eq!(
+                serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>(
+                    "-9007199254740992"
+                )?,
+                value,
+            );
+            assert!(serde_json::from_str::<RangedI64<-9_007_199_254_740_992, 0>>(
+                "-9007199254740993"
+            )
+            .is_err());
 
             Ok(())
         }
