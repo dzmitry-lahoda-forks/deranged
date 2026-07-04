@@ -10,6 +10,7 @@
     any(
         feature = "serde",
         feature = "quickcheck",
+        feature = "redb",
         feature = "sqlx09-pg",
         feature = "schemars"
     )
@@ -2074,6 +2075,132 @@ macro_rules! impl_ranged {
             }
         }
         )?
+
+        /// Store as the primitive integer in redb.
+        #[cfg(feature = "redb")]
+        impl<const MIN: $internal, const MAX: $internal> redb::Value for $type<MIN, MAX> {
+            type SelfType<'a>
+                = Self
+            where
+                Self: 'a;
+            type AsBytes<'a>
+                = [u8; core::mem::size_of::<$internal>()]
+            where
+                Self: 'a;
+
+            #[inline(always)]
+            fn fixed_width() -> Option<usize> {
+                Some(core::mem::size_of::<$internal>())
+            }
+
+            #[inline]
+            fn from_bytes<'a>(data: &'a [u8]) -> Self
+            where
+                Self: 'a,
+            {
+                const { assert!(MIN <= MAX); }
+                let value = <$internal>::from_le_bytes(
+                    data.try_into().expect("invalid redb integer width"),
+                );
+                Self::new(value).expect("redb value is outside the ranged integer bounds")
+            }
+
+            #[inline(always)]
+            fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+            where
+                Self: 'b,
+            {
+                const { assert!(MIN <= MAX); }
+                value.get().to_le_bytes()
+            }
+
+            #[inline]
+            fn type_name() -> redb::TypeName {
+                const { assert!(MIN <= MAX); }
+                redb::TypeName::new(&alloc::format!(
+                    "deranged::{}<{}, {}>",
+                    stringify!($type),
+                    MIN,
+                    MAX,
+                ))
+            }
+        }
+
+        #[cfg(feature = "redb")]
+        impl<const MIN: $internal, const MAX: $internal> redb::Key for $type<MIN, MAX> {
+            #[inline]
+            fn compare(data1: &[u8], data2: &[u8]) -> Ordering {
+                <Self as redb::Value>::from_bytes(data1)
+                    .cmp(&<Self as redb::Value>::from_bytes(data2))
+            }
+        }
+
+        /// Store as the niche-encoded primitive integer in redb.
+        #[cfg(feature = "redb")]
+        impl<const MIN: $internal, const MAX: $internal> redb::Value
+            for $optional_type<MIN, MAX>
+        {
+            type SelfType<'a>
+                = Self
+            where
+                Self: 'a;
+            type AsBytes<'a>
+                = [u8; core::mem::size_of::<$internal>()]
+            where
+                Self: 'a;
+
+            #[inline(always)]
+            fn fixed_width() -> Option<usize> {
+                Some(core::mem::size_of::<$internal>())
+            }
+
+            #[inline]
+            fn from_bytes<'a>(data: &'a [u8]) -> Self
+            where
+                Self: 'a,
+            {
+                const { assert!(MIN <= MAX); }
+                let value = <$internal>::from_le_bytes(
+                    data.try_into().expect("invalid redb integer width"),
+                );
+                if value == Self::NICHE {
+                    Self::None
+                } else {
+                    $type::new(value)
+                        .map(Self::Some)
+                        .expect("redb value is outside the optional ranged integer bounds")
+                }
+            }
+
+            #[inline(always)]
+            fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+            where
+                Self: 'b,
+            {
+                const { assert!(MIN <= MAX); }
+                value.inner().to_le_bytes()
+            }
+
+            #[inline]
+            fn type_name() -> redb::TypeName {
+                const { assert!(MIN <= MAX); }
+                redb::TypeName::new(&alloc::format!(
+                    "deranged::{}<{}, {}>",
+                    stringify!($optional_type),
+                    MIN,
+                    MAX,
+                ))
+            }
+        }
+
+        #[cfg(feature = "redb")]
+        impl<const MIN: $internal, const MAX: $internal> redb::Key for $optional_type<MIN, MAX> {
+            #[inline]
+            fn compare(data1: &[u8], data2: &[u8]) -> Ordering {
+                <Self as redb::Value>::from_bytes(data1)
+                    .cmp(&<Self as redb::Value>::from_bytes(data2))
+            }
+        }
 
         #[cfg(feature = "rand08")]
         impl<

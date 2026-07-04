@@ -903,6 +903,92 @@ macro_rules! tests {
             );
         }
 
+        #[cfg(feature = "redb")]
+        #[test]
+        fn redb_key_value() {
+            use redb::{Key as _, ReadableDatabase as _, TableDefinition, Value as _};
+
+            const TABLE: TableDefinition<RangedI16<-5, 10>, OptionRangedU8<5, 10>> =
+                TableDefinition::new("ranged");
+
+            let ranged_u8 = RangedU8::<5, 10>::MIN;
+            let ranged_u8_bytes = RangedU8::<5, 10>::as_bytes(&ranged_u8);
+            assert_eq!(RangedU8::<5, 10>::fixed_width(), Some(1));
+            assert_eq!(RangedU8::<5, 10>::from_bytes(ranged_u8_bytes.as_ref()), ranged_u8);
+            assert_eq!(
+                RangedU8::<5, 10>::compare(ranged_u8_bytes.as_ref(), ranged_u8_bytes.as_ref()),
+                core::cmp::Ordering::Equal,
+            );
+
+            let ranged_i16 = RangedI16::<-5, 10>::MIN;
+            let ranged_i16_bytes = RangedI16::<-5, 10>::as_bytes(&ranged_i16);
+            assert_eq!(RangedI16::<-5, 10>::fixed_width(), Some(2));
+            assert_eq!(
+                RangedI16::<-5, 10>::from_bytes(ranged_i16_bytes.as_ref()),
+                ranged_i16,
+            );
+
+            let optional_none = OptionRangedU8::<5, 10>::None;
+            let optional_none_bytes = OptionRangedU8::<5, 10>::as_bytes(&optional_none);
+            assert_eq!(OptionRangedU8::<5, 10>::fixed_width(), Some(1));
+            assert_eq!(
+                OptionRangedU8::<5, 10>::from_bytes(optional_none_bytes.as_ref()),
+                optional_none,
+            );
+
+            let optional_some = OptionRangedU8::<5, 10>::Some(RangedU8::<5, 10>::MAX);
+            let optional_some_bytes = OptionRangedU8::<5, 10>::as_bytes(&optional_some);
+            assert_eq!(
+                OptionRangedU8::<5, 10>::from_bytes(optional_some_bytes.as_ref()),
+                optional_some,
+            );
+
+            let low = RangedI16::<-5, 10>::MIN;
+            let high = RangedI16::<-5, 10>::MAX;
+            assert_eq!(
+                RangedI16::<-5, 10>::compare(
+                    RangedI16::<-5, 10>::as_bytes(&low).as_ref(),
+                    RangedI16::<-5, 10>::as_bytes(&high).as_ref(),
+                ),
+                core::cmp::Ordering::Less,
+            );
+
+            let none = OptionRangedU8::<5, 10>::None;
+            let some = OptionRangedU8::<5, 10>::Some(RangedU8::<5, 10>::MIN);
+            assert_eq!(
+                OptionRangedU8::<5, 10>::compare(
+                    OptionRangedU8::<5, 10>::as_bytes(&none).as_ref(),
+                    OptionRangedU8::<5, 10>::as_bytes(&some).as_ref(),
+                ),
+                core::cmp::Ordering::Less,
+            );
+
+            let db = redb::Database::builder()
+                .create_with_backend(redb::backends::InMemoryBackend::new())
+                .unwrap();
+            let write_txn = db.begin_write().unwrap();
+            {
+                let mut table = write_txn.open_table(TABLE).unwrap();
+                table.insert(low, none).unwrap();
+                table.insert(high, some).unwrap();
+            }
+            write_txn.commit().unwrap();
+
+            let read_txn = db.begin_read().unwrap();
+            let table = read_txn.open_table(TABLE).unwrap();
+            assert_eq!(table.get(low).unwrap().unwrap().value(), none);
+            assert_eq!(table.get(high).unwrap().unwrap().value(), some);
+
+            let items = table
+                .range(low..=high)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].0.value(), low);
+            assert_eq!(items[1].0.value(), high);
+        }
+
         #[test]
         fn prost_varint() {
             let value = RangedU32::<0, 300>::MAX;
