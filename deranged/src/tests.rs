@@ -745,7 +745,7 @@ macro_rules! tests {
         fn borsh_schema() {
             $(
             let schema = borsh::schema::BorshSchemaContainer::for_type::<$t<5, 10>>();
-            let declaration = format!("deranged::{}<5, 10>", stringify!($t));
+            let declaration = <$inner as borsh::BorshSchema>::declaration();
             assert_eq!(schema.declaration(), &declaration);
             assert_eq!(
                 schema.get_definition(&declaration),
@@ -753,7 +753,7 @@ macro_rules! tests {
             );
 
             let schema = borsh::schema::BorshSchemaContainer::for_type::<$opt<5, 10>>();
-            let declaration = format!("deranged::{}<5, 10>", stringify!($opt));
+            let declaration = <$inner as borsh::BorshSchema>::declaration();
             assert_eq!(schema.declaration(), &declaration);
             assert_eq!(
                 schema.get_definition(&declaration),
@@ -920,6 +920,10 @@ macro_rules! tests {
             let ranged_u8 = RangedU8::<5, 10>::MIN;
             let ranged_u8_bytes = RangedU8::<5, 10>::as_bytes(&ranged_u8);
             assert_eq!(RangedU8::<5, 10>::fixed_width(), Some(1));
+            assert_eq!(
+                RangedU8::<5, 10>::type_name().name(),
+                <u8 as redb::Value>::type_name().name(),
+            );
             assert_eq!(RangedU8::<5, 10>::from_bytes(ranged_u8_bytes.as_ref()), ranged_u8);
             assert_eq!(
                 RangedU8::<5, 10>::compare(ranged_u8_bytes.as_ref(), ranged_u8_bytes.as_ref()),
@@ -937,6 +941,10 @@ macro_rules! tests {
             let optional_none = OptionRangedU8::<5, 10>::None;
             let optional_none_bytes = OptionRangedU8::<5, 10>::as_bytes(&optional_none);
             assert_eq!(OptionRangedU8::<5, 10>::fixed_width(), Some(1));
+            assert_eq!(
+                OptionRangedU8::<5, 10>::type_name().name(),
+                <u8 as redb::Value>::type_name().name(),
+            );
             assert_eq!(
                 OptionRangedU8::<5, 10>::from_bytes(optional_none_bytes.as_ref()),
                 optional_none,
