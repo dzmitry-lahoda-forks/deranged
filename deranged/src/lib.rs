@@ -110,7 +110,7 @@ const fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
 /// Asserts that a parse result failed with the expected error kind.
 const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: IntErrorKind) {
     let Err(error) = result else {
-        panic!("expected parse error")
+        const_panic::concat_panic!("expected parse error")
     };
     let expected = parse_int_error_from_kind(expected);
     let actual_bytes: [u8; size_of::<ParseIntError>()] =
@@ -121,9 +121,14 @@ const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: 
         unsafe { core::mem::transmute_copy(&expected) };
     let mut index = 0;
     while index < size_of::<ParseIntError>() {
-        assert!(
+        const_panic::concat_assert!(
             actual_bytes[index] == expected_bytes[index],
-            "unsupported version of rust std/compiler"
+            "unsupported version of rust std/compiler: ParseIntError byte ",
+            index,
+            " was ",
+            actual_bytes[index],
+            ", expected ",
+            expected_bytes[index],
         );
         index += 1;
     }
@@ -137,13 +142,19 @@ const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: 
 /// Also there are several attempts to open this error,
 /// in general peopl are not agains.
 const _: () = {
-    assert!(
+    const_panic::concat_assert!(
         size_of::<ParseIntError>() == size_of::<IntErrorKind>(),
-        "unsupported version of rust std/compiler"
+        "unsupported version of rust std/compiler: ParseIntError size ",
+        size_of::<ParseIntError>(),
+        " != IntErrorKind size ",
+        size_of::<IntErrorKind>(),
     );
-    assert!(
+    const_panic::concat_assert!(
         align_of::<ParseIntError>() == align_of::<IntErrorKind>(),
-        "unsupported version of rust std/compiler"
+        "unsupported version of rust std/compiler: ParseIntError alignment ",
+        align_of::<ParseIntError>(),
+        " != IntErrorKind alignment ",
+        align_of::<IntErrorKind>(),
     );
 
     assert_error_kind(u8::from_str_radix("", 10), IntErrorKind::Empty);
