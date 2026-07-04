@@ -102,18 +102,21 @@ impl Error for TryFromIntError {}
 /// Constructs a primitive parse error with the provided kind.
 #[inline(always)]
 const fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
-    // Safety: The caller guarantees that the source and destination error layouts match.
+    // Safety: Proved by const time asserts that `ParseIntError` has the same layout as `IntErrorKind`.
     unsafe { core::mem::transmute_copy(&kind) }
 }
 
+/// Asserts that a parse result failed with the expected error kind.
 const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: IntErrorKind) {
     let Err(error) = result else {
         panic!("expected parse error")
     };
     let expected = parse_int_error_from_kind(expected);
     let actual_bytes: [u8; size_of::<ParseIntError>()] =
+        // Safety: is called only from constant at compile time, will panic if not safe
         unsafe { core::mem::transmute_copy(&error) };
     let expected_bytes: [u8; size_of::<ParseIntError>()] =
+        // Safety: is called only from constant at compile time, will panic if not safe
         unsafe { core::mem::transmute_copy(&expected) };
     let mut index = 0;
     while index < size_of::<ParseIntError>() {
@@ -179,14 +182,17 @@ macro_rules! if_unsigned {
 
 /// The smallest JSON integer that is safe for Web clients.
 #[cfg(any(feature = "serde", feature = "schemars"))]
+#[allow(clippy::decimal_literal_representation)]
 const JSON_SAFE_SIGNED_INTEGER_MIN: i128 = -9_007_199_254_740_991;
 
 /// The largest JSON integer that is safe for Web clients.
 #[cfg(any(feature = "serde", feature = "schemars"))]
+#[allow(clippy::decimal_literal_representation)]
 const JSON_SAFE_SIGNED_INTEGER_MAX: i128 = 9_007_199_254_740_991;
 
 /// The largest unsigned JSON integer that is safe for Web clients.
 #[cfg(any(feature = "serde", feature = "schemars"))]
+#[allow(clippy::decimal_literal_representation)]
 const JSON_SAFE_UNSIGNED_INTEGER_MAX: u128 = 9_007_199_254_740_991;
 
 /// Whether a signed range is within Web JSON's safe integer range.
