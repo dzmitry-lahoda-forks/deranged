@@ -238,15 +238,69 @@ macro_rules! article {
     };
 }
 
-/// The base name used for generated ranged integer integration type names.
-macro_rules! ranged_type_name {
-    ($type:ident) => {
-        stringify!($type)
+/// Assert that a generated ranged type fits in its SQL storage type.
+/// Ideally we'd conditionally implement sqlx enc/dec based on
+/// range, via witness types on stable or via const cmp on nightly             
+#[cfg(feature = "sqlx09-pg")]
+macro_rules! assert_sql_storage_range {
+    ($is_signed:ident, $type:ident, $sql_int:ident, $min:expr, $max:expr) => {
+        if_signed! { $is_signed
+            const_panic::concat_assert!(
+                $min as i128 >= <$sql_int>::MIN as i128,
+                stringify!($type),
+                "<",
+                $min,
+                ", ",
+                $max,
+                "> minimum ",
+                $min,
+                " does not fit SQL storage type ",
+                stringify!($sql_int),
+                " range ",
+                <$sql_int>::MIN,
+                "..=",
+                <$sql_int>::MAX,
+            );
+            const_panic::concat_assert!(
+                $max as i128 <= <$sql_int>::MAX as i128,
+                stringify!($type),
+                "<",
+                $min,
+                ", ",
+                $max,
+                "> maximum ",
+                $max,
+                " does not fit SQL storage type ",
+                stringify!($sql_int),
+                " range ",
+                <$sql_int>::MIN,
+                "..=",
+                <$sql_int>::MAX,
+            );
+        }
+        if_unsigned! { $is_signed
+            const_panic::concat_assert!(
+                $max as u128 <= <$sql_int>::MAX as u128,
+                stringify!($type),
+                "<",
+                $min,
+                ", ",
+                $max,
+                "> maximum ",
+                $max,
+                " does not fit SQL storage type ",
+                stringify!($sql_int),
+                " range ",
+                <$sql_int>::MIN,
+                "..=",
+                <$sql_int>::MAX,
+            );
+        }
     };
 }
 
 /// The capacity of the temporary buffer used to format integration type names.
-#[cfg(any(feature = "borsh_schema", feature = "redb", feature = "schemars"))]
+#[cfg(feature = "schemars")]
 const TYPE_NAME_CAPACITY: usize = 192;
 
 /// Output the provided code if and only if the list does not include `rand_09`.
@@ -1808,8 +1862,8 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSerialize for $type<MIN, MAX> {
             #[inline(always)]
@@ -1819,8 +1873,8 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSerialize
             for $optional_type<MIN, MAX>
@@ -1832,8 +1886,8 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshDeserialize
             for $type<MIN, MAX>
@@ -1846,8 +1900,8 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshDeserialize
             for $optional_type<MIN, MAX>
@@ -1866,8 +1920,12 @@ macro_rules! impl_ranged {
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
+        ///
+        /// Whole schema is delegated to the underlying type.
+        /// Because `deranged::Reanged$type<$min, $max>"` is infinite amount of types to handle,
+        /// and `BorshSchema` handles only byte boundaries, not bits nor decimal.
         #[cfg(feature = "borsh_schema")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSchema for $type<MIN, MAX> {
             #[inline]
@@ -1884,16 +1942,15 @@ macro_rules! impl_ranged {
                 );
             }
 
-            #[inline]
+            #[inline(always)]
             fn declaration() -> borsh::schema::Declaration {
                 const { assert!(MIN <= MAX); }
-                let type_name = Self::binary_type_name();
-                type_name.r().as_str().into()
+                <$internal as borsh::BorshSchema>::declaration()
             }
         }
 
-        /// Pure binary le transparent to underlying type
-        /// (no byte reduction based on niche value optimization)
+        /// Pure binary LE, transparent to underlying type
+        /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh_schema")]
         impl<const MIN: $internal, const MAX: $internal> borsh::BorshSchema
             for $optional_type<MIN, MAX>
@@ -1912,11 +1969,10 @@ macro_rules! impl_ranged {
                 );
             }
 
-            #[inline]
+            #[inline(always)]
             fn declaration() -> borsh::schema::Declaration {
                 const { assert!(MIN <= MAX); }
-                let type_name = Self::binary_type_name();
-                type_name.r().as_str().into()
+                <$internal as borsh::BorshSchema>::declaration()
             }
         }
 
@@ -1935,7 +1991,7 @@ macro_rules! impl_ranged {
                 const_format::unwrap!(const_format::writec!(
                     type_name,
                     "{}_{}_{}",
-                    ranged_type_name!($type),
+                    stringify!($type),
                     MIN,
                     MAX,
                 ));
@@ -2080,16 +2136,7 @@ macro_rules! impl_ranged {
                 alloc::boxed::Box<dyn core::error::Error + 'static + Send + Sync>,
             > {
                 const { assert!(MIN <= MAX); }
-                // ideally we'd conditionally implement sqlx enc/dec based on
-                // range, but this is impossible so we panic at runtime instead.
-                assert!(
-                    MIN as i128 >= <$sql_int>::MIN as i128,
-                    concat!(stringify!($type), " minimum does not fit SQL storage type"),
-                );
-                assert!(
-                    MAX as i128 <= <$sql_int>::MAX as i128,
-                    concat!(stringify!($type), " maximum does not fit SQL storage type"),
-                );
+                assert_sql_storage_range!($is_signed, $type, $sql_int, MIN, MAX);
 
                 let value: $sql_int = self
                     .get()
@@ -2109,16 +2156,7 @@ macro_rules! impl_ranged {
                 value: <sqlx09::Postgres as sqlx09::Database>::ValueRef<'r>,
             ) -> Result<Self, alloc::boxed::Box<dyn core::error::Error + 'static + Send + Sync>> {
                 const { assert!(MIN <= MAX); }
-                // ideally we'd conditionally implement sqlx enc/dec based on
-                // range, but this is possible only via type witness on stable (or on nightly).
-                assert!(
-                    MIN as i128 >= <$sql_int>::MIN as i128,
-                    concat!(stringify!($type), " minimum does not fit SQL storage type"),
-                );
-                assert!(
-                    MAX as i128 <= <$sql_int>::MAX as i128,
-                    concat!(stringify!($type), " maximum does not fit SQL storage type"),
-                );
+                assert_sql_storage_range!($is_signed, $type, $sql_int, MIN, MAX);
 
                 let value = <$sql_int as sqlx09::Decode<sqlx09::Postgres>>::decode(value)?;
                 let value: $internal = value.try_into().map_err(|_| TryFromIntError)?;
@@ -2127,26 +2165,6 @@ macro_rules! impl_ranged {
             }
         }
         )?
-
-        #[cfg(any(feature = "borsh_schema", feature = "redb"))]
-        impl<const MIN: $internal, const MAX: $internal> $type<MIN, MAX> {
-            // Do not use `type_name` as it is `This is intended for diagnostic use.`
-            // nor it is `const`
-            #[inline(always)]
-            const fn binary_type_name() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
-                const { assert!(MIN <= MAX); }
-                let mut type_name =
-                    const_format::StrWriter::new([0; TYPE_NAME_CAPACITY]);
-                const_format::unwrap!(const_format::writec!(
-                    type_name,
-                    "deranged::{}<{}, {}>",
-                    ranged_type_name!($type),
-                    MIN,
-                    MAX,
-                ));
-                type_name
-            }
-        }
 
         /// Store as the primitive integer in redb.
         #[cfg(feature = "redb")]
@@ -2186,10 +2204,9 @@ macro_rules! impl_ranged {
                 value.get().to_le_bytes()
             }
 
-            #[inline]
+            #[inline(always)]
             fn type_name() -> redb::TypeName {
-                let type_name = Self::binary_type_name();
-                redb::TypeName::new(type_name.r().as_str())
+                redb::TypeName::new(stringify!($internal))
             }
         }
 
@@ -2199,24 +2216,6 @@ macro_rules! impl_ranged {
             fn compare(data1: &[u8], data2: &[u8]) -> Ordering {
                 <Self as redb::Value>::from_bytes(data1)
                     .cmp(&<Self as redb::Value>::from_bytes(data2))
-            }
-        }
-
-        #[cfg(any(feature = "borsh_schema", feature = "redb"))]
-        impl<const MIN: $internal, const MAX: $internal> $optional_type<MIN, MAX> {
-            #[inline(always)]
-            const fn binary_type_name() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
-                const { assert!(MIN <= MAX); }
-                let mut type_name =
-                    const_format::StrWriter::new([0; TYPE_NAME_CAPACITY]);
-                const_format::unwrap!(const_format::writec!(
-                    type_name,
-                    "deranged::{}<{}, {}>",
-                    ranged_type_name!($optional_type),
-                    MIN,
-                    MAX,
-                ));
-                type_name
             }
         }
 
@@ -2266,10 +2265,9 @@ macro_rules! impl_ranged {
                 value.inner().to_le_bytes()
             }
 
-            #[inline]
+            #[inline(always)]
             fn type_name() -> redb::TypeName {
-                let type_name = Self::binary_type_name();
-                redb::TypeName::new(type_name.r().as_str())
+                redb::TypeName::new(stringify!($internal))
             }
         }
 
