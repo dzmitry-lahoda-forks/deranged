@@ -745,7 +745,7 @@ macro_rules! tests {
         fn borsh_schema() {
             $(
             let schema = borsh::schema::BorshSchemaContainer::for_type::<$t<5, 10>>();
-            let declaration = <$inner as borsh::BorshSchema>::declaration();
+            let declaration = format!("deranged::{}<5, 10>", stringify!($t));
             assert_eq!(schema.declaration(), &declaration);
             assert_eq!(
                 schema.get_definition(&declaration),
@@ -753,6 +753,7 @@ macro_rules! tests {
             );
 
             let schema = borsh::schema::BorshSchemaContainer::for_type::<$opt<5, 10>>();
+            let declaration = format!("deranged::{}<5, 10>", stringify!($opt));
             assert_eq!(schema.declaration(), &declaration);
             assert_eq!(
                 schema.get_definition(&declaration),
@@ -764,6 +765,11 @@ macro_rules! tests {
         #[cfg(feature = "schemars")]
         #[test]
         fn schemars_json_safe_integer_ranges() -> serde_json::Result<()> {
+            assert_eq!(
+                <RangedI64<-5, 10> as schemars::JsonSchema>::schema_name(),
+                "RangedI64_-5_10",
+            );
+
             let schema =
                 serde_json::to_value(schemars::schema_for!(RangedU64<0, 9_007_199_254_740_991>))?;
             assert_eq!(schema["type"], "integer");

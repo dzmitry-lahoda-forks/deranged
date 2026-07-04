@@ -10,7 +10,6 @@
     any(
         feature = "serde",
         feature = "quickcheck",
-        feature = "redb",
         feature = "sqlx09-pg",
         feature = "schemars"
     )
@@ -238,6 +237,17 @@ macro_rules! article {
         "A"
     };
 }
+
+/// The base name used for generated ranged integer integration type names.
+macro_rules! ranged_type_name {
+    ($type:ident) => {
+        stringify!($type)
+    };
+}
+
+/// The capacity of the temporary buffer used to format integration type names.
+#[cfg(any(feature = "borsh_schema", feature = "redb", feature = "schemars"))]
+const TYPE_NAME_CAPACITY: usize = 192;
 
 /// Output the provided code if and only if the list does not include `rand_09`.
 #[allow(unused_macro_rules)]
@@ -1868,13 +1878,17 @@ macro_rules! impl_ranged {
                 >,
             ) {
                 const { assert!(MIN <= MAX); }
-                <$internal as borsh::BorshSchema>::add_definitions_recursively(definitions);
+                definitions.insert(
+                    Self::declaration(),
+                    borsh::schema::Definition::Primitive(size_of::<$internal>() as u8),
+                );
             }
 
             #[inline]
             fn declaration() -> borsh::schema::Declaration {
                 const { assert!(MIN <= MAX); }
-                <$internal as borsh::BorshSchema>::declaration()
+                let type_name = Self::binary_type_name();
+                type_name.r().as_str().into()
             }
         }
 
@@ -1892,13 +1906,17 @@ macro_rules! impl_ranged {
                 >,
             ) {
                 const { assert!(MIN <= MAX); }
-                <$internal as borsh::BorshSchema>::add_definitions_recursively(definitions);
+                definitions.insert(
+                    Self::declaration(),
+                    borsh::schema::Definition::Primitive(size_of::<$internal>() as u8),
+                );
             }
 
             #[inline]
             fn declaration() -> borsh::schema::Declaration {
                 const { assert!(MIN <= MAX); }
-                <$internal as borsh::BorshSchema>::declaration()
+                let type_name = Self::binary_type_name();
+                type_name.r().as_str().into()
             }
         }
 
@@ -1908,6 +1926,29 @@ macro_rules! impl_ranged {
         /// This schema describes the serialized JSON shape. Deserialization intentionally accepts a
         /// wider human-readable input shape: integer strings or integer numbers, provided they fit
         /// the ranged bounds.
+        #[cfg(feature = "schemars")]
+        impl<const MIN: $internal, const MAX: $internal> $type<MIN, MAX> {
+            #[inline(always)]
+            const fn human_type_name_str() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
+                const { assert!(MIN <= MAX); }
+                let mut type_name = const_format::StrWriter::new([0; TYPE_NAME_CAPACITY]);
+                const_format::unwrap!(const_format::writec!(
+                    type_name,
+                    "{}_{}_{}",
+                    ranged_type_name!($type),
+                    MIN,
+                    MAX,
+                ));
+                type_name
+            }
+
+            #[inline]
+            fn human_type_name() -> alloc::borrow::Cow<'static, str> {
+                let type_name = Self::human_type_name_str();
+                alloc::borrow::Cow::Owned(type_name.r().as_str().into())
+            }
+        }
+
         #[cfg(feature = "schemars")]
         impl<
             const MIN: $internal,
@@ -1919,7 +1960,7 @@ macro_rules! impl_ranged {
             }
 
             fn schema_name() -> alloc::borrow::Cow<'static, str> {
-                alloc::borrow::Cow::Borrowed(stringify!($type))
+                Self::human_type_name()
             }
 
             fn json_schema(
@@ -2087,6 +2128,26 @@ macro_rules! impl_ranged {
         }
         )?
 
+        #[cfg(any(feature = "borsh_schema", feature = "redb"))]
+        impl<const MIN: $internal, const MAX: $internal> $type<MIN, MAX> {
+            // Do not use `type_name` as it is `This is intended for diagnostic use.`
+            // nor it is `const`
+            #[inline(always)]
+            const fn binary_type_name() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
+                const { assert!(MIN <= MAX); }
+                let mut type_name =
+                    const_format::StrWriter::new([0; TYPE_NAME_CAPACITY]);
+                const_format::unwrap!(const_format::writec!(
+                    type_name,
+                    "deranged::{}<{}, {}>",
+                    ranged_type_name!($type),
+                    MIN,
+                    MAX,
+                ));
+                type_name
+            }
+        }
+
         /// Store as the primitive integer in redb.
         #[cfg(feature = "redb")]
         impl<const MIN: $internal, const MAX: $internal> redb::Value for $type<MIN, MAX> {
@@ -2127,13 +2188,8 @@ macro_rules! impl_ranged {
 
             #[inline]
             fn type_name() -> redb::TypeName {
-                const { assert!(MIN <= MAX); }
-                redb::TypeName::new(&alloc::format!(
-                    "deranged::{}<{}, {}>",
-                    stringify!($type),
-                    MIN,
-                    MAX,
-                ))
+                let type_name = Self::binary_type_name();
+                redb::TypeName::new(type_name.r().as_str())
             }
         }
 
@@ -2143,6 +2199,24 @@ macro_rules! impl_ranged {
             fn compare(data1: &[u8], data2: &[u8]) -> Ordering {
                 <Self as redb::Value>::from_bytes(data1)
                     .cmp(&<Self as redb::Value>::from_bytes(data2))
+            }
+        }
+
+        #[cfg(any(feature = "borsh_schema", feature = "redb"))]
+        impl<const MIN: $internal, const MAX: $internal> $optional_type<MIN, MAX> {
+            #[inline(always)]
+            const fn binary_type_name() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
+                const { assert!(MIN <= MAX); }
+                let mut type_name =
+                    const_format::StrWriter::new([0; TYPE_NAME_CAPACITY]);
+                const_format::unwrap!(const_format::writec!(
+                    type_name,
+                    "deranged::{}<{}, {}>",
+                    ranged_type_name!($optional_type),
+                    MIN,
+                    MAX,
+                ));
+                type_name
             }
         }
 
@@ -2194,13 +2268,8 @@ macro_rules! impl_ranged {
 
             #[inline]
             fn type_name() -> redb::TypeName {
-                const { assert!(MIN <= MAX); }
-                redb::TypeName::new(&alloc::format!(
-                    "deranged::{}<{}, {}>",
-                    stringify!($optional_type),
-                    MIN,
-                    MAX,
-                ))
+                let type_name = Self::binary_type_name();
+                redb::TypeName::new(type_name.r().as_str())
             }
         }
 
