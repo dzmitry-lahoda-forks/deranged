@@ -92,6 +92,25 @@ fn errors() {
     );
 }
 
+#[cfg(feature = "ruint")]
+#[test]
+fn ruint_u256() {
+    use ruint::aliases::U256;
+
+    assert_eq!(
+        U256::from(RangedU128::<0, { u128::MAX }>::MAX),
+        U256::from(u128::MAX),
+    );
+    assert_eq!(
+        U256::from(RangedUsize::<0, { usize::MAX }>::MAX),
+        U256::from(usize::MAX),
+    );
+    assert_eq!(
+        U256::from(RangedI128::<0, { i128::MAX }>::MAX),
+        U256::from(i128::MAX as u128),
+    );
+}
+
 macro_rules! tests {
     ($($signed:ident $opt:ident $t:ident $inner:ident),* $(,)?) => {
         #[test]

@@ -2791,6 +2791,85 @@ impl_ranged! {
     }
 }
 
+#[cfg(feature = "ruint")]
+macro_rules! impl_ruint_u256_from_unsigned {
+    ($($type:ident($internal:ident))+) => {$(
+        impl<const MIN: $internal, const MAX: $internal> ruint::UintTryFrom<$type<MIN, MAX>>
+            for ruint::aliases::U256
+        {
+            #[inline(always)]
+            #[allow(trivial_numeric_casts)]
+            fn uint_try_from(
+                value: $type<MIN, MAX>,
+            ) -> Result<Self, ruint::ToUintError<Self>> {
+                const { assert!(MIN <= MAX); }
+                Self::try_from(value.get() as u128)
+            }
+        }
+
+        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+            for ruint::aliases::U256
+        {
+            #[inline(always)]
+            #[allow(trivial_numeric_casts)]
+            fn from(value: $type<MIN, MAX>) -> Self {
+                <Self as ruint::UintTryFrom<_>>::uint_try_from(value)
+                    .expect("ranged integer always fits in U256")
+            }
+        }
+    )+};
+}
+
+#[cfg(feature = "ruint")]
+macro_rules! impl_ruint_u256_from_non_negative_signed {
+    ($($type:ident($internal:ident))+) => {$(
+        impl<const MIN: $internal, const MAX: $internal> ruint::UintTryFrom<$type<MIN, MAX>>
+            for ruint::aliases::U256
+        {
+            #[inline(always)]
+            fn uint_try_from(
+                value: $type<MIN, MAX>,
+            ) -> Result<Self, ruint::ToUintError<Self>> {
+                const {
+                    assert!(MIN <= MAX);
+                    assert!(MIN >= 0, "range must be non-negative to convert to U256");
+                }
+                Self::try_from(value.get() as u128)
+            }
+        }
+
+        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+            for ruint::aliases::U256
+        {
+            #[inline(always)]
+            fn from(value: $type<MIN, MAX>) -> Self {
+                <Self as ruint::UintTryFrom<_>>::uint_try_from(value)
+                    .expect("non-negative ranged integer always fits in U256")
+            }
+        }
+    )+};
+}
+
+#[cfg(feature = "ruint")]
+impl_ruint_u256_from_unsigned! {
+    RangedU8(u8)
+    RangedU16(u16)
+    RangedU32(u32)
+    RangedU64(u64)
+    RangedU128(u128)
+    RangedUsize(usize)
+}
+
+#[cfg(feature = "ruint")]
+impl_ruint_u256_from_non_negative_signed! {
+    RangedI8(i8)
+    RangedI16(i16)
+    RangedI32(i32)
+    RangedI64(i64)
+    RangedI128(i128)
+    RangedIsize(isize)
+}
+
 #[cfg(feature = "sqlx09-pg")]
 impl<const MIN: u128, const MAX: u128> sqlx09::Type<sqlx09::Postgres> for RangedU128<MIN, MAX> {
     #[inline]
