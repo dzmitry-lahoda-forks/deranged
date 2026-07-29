@@ -1130,3 +1130,27 @@ tests![
     unsigned OptionRangedU128 RangedU128 u128,
     unsigned OptionRangedUsize RangedUsize usize,
 ];
+
+#[cfg(feature = "easy-cast")]
+#[test]
+fn test_easy_cast() {
+    use easy_cast::{Cast, Conv};
+
+    let x: RangedU8<0, 100> = 50u8.cast();
+    assert_eq!(x.get(), 50);
+
+    let y: Result<RangedU8<0, 100>, _> = 150u8.try_cast();
+    assert!(y.is_err());
+
+    let z: u32 = x.cast();
+    assert_eq!(z, 50);
+
+    let opt: OptionRangedU8<0, 100> = 50u8.cast();
+    assert_eq!(opt.get(), Some(x));
+
+    let opt_err: Result<OptionRangedU8<0, 100>, _> = 150u8.try_cast();
+    assert!(opt_err.is_err());
+
+    let conv_res = RangedU8::<0, 100>::try_conv(50u8);
+    assert_eq!(conv_res, Ok(x));
+}

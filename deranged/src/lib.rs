@@ -2386,6 +2386,129 @@ macro_rules! impl_ranged {
             }
         }
 
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal, Src> easy_cast::Conv<Src> for $type<MIN, MAX>
+        where
+            $internal: easy_cast::Conv<Src>,
+        {
+            #[inline]
+            fn try_conv(src: Src) -> Result<Self, easy_cast::Error> {
+                let val = <$internal as easy_cast::Conv<Src>>::try_conv(src)?;
+                Self::new(val).ok_or(easy_cast::Error::Range)
+            }
+        }
+
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal, Src> easy_cast::Conv<Src>
+            for $optional_type<MIN, MAX>
+        where
+            $type<MIN, MAX>: easy_cast::Conv<Src>,
+        {
+            #[inline]
+            fn try_conv(src: Src) -> Result<Self, easy_cast::Error> {
+                <$type<MIN, MAX> as easy_cast::Conv<Src>>::try_conv(src).map(Self::from)
+            }
+        }
+
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u8 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                u8::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u16 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                u16::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u32 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                u32::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u64 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                u64::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u128 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                u128::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for usize {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                usize::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i8 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                i8::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i16 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                i16::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i32 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                i32::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i64 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                i64::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i128 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                i128::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for isize {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                isize::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for f32 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                f32::try_conv(src.get())
+            }
+        }
+        #[cfg(feature = "easy-cast")]
+        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for f64 {
+            #[inline]
+            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+                f64::try_conv(src.get())
+            }
+        }
+
         #[cfg(feature = "arbitrary")]
         impl<'a, const MIN: $internal, const MAX: $internal> arbitrary::Arbitrary<'a>
             for $type<MIN, MAX>
