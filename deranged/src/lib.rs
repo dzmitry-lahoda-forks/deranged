@@ -107,7 +107,10 @@ const fn parse_int_error_from_kind(kind: IntErrorKind) -> ParseIntError {
 }
 
 /// Asserts that a parse result failed with the expected error kind.
-const fn assert_error_kind<T: Copy>(result: Result<T, ParseIntError>, expected: IntErrorKind) {
+pub(crate) const fn assert_error_kind<T: Copy>(
+    result: Result<T, ParseIntError>,
+    expected: IntErrorKind,
+) {
     let Err(error) = result else {
         const_panic::concat_panic!("expected parse error")
     };
@@ -155,18 +158,28 @@ const _: () = {
         " != IntErrorKind alignment ",
         align_of::<IntErrorKind>(),
     );
+    #[deny(clippy::wildcard_enum_match_arm, clippy::unreachable_patterns)]
+    const fn check_kind(kind: IntErrorKind) {
+        match kind {
+            IntErrorKind::Empty => {}
+            IntErrorKind::InvalidDigit => {}
+            IntErrorKind::PosOverflow => {}
+            IntErrorKind::NegOverflow => {}
+            IntErrorKind::Zero => {}
+            _ => const_panic::concat_panic!("unhandled IntErrorKind variant"),
+        }
+    }
 
+    check_kind(IntErrorKind::Empty);
+    check_kind(IntErrorKind::InvalidDigit);
+    check_kind(IntErrorKind::PosOverflow);
+    check_kind(IntErrorKind::NegOverflow);
+    check_kind(IntErrorKind::Zero);
     assert_error_kind(u8::from_str_radix("", 10), IntErrorKind::Empty);
     assert_error_kind(i32::from_str_radix(":>", 10), IntErrorKind::InvalidDigit);
     assert_error_kind(u8::from_str_radix("256", 10), IntErrorKind::PosOverflow);
     assert_error_kind(i8::from_str_radix("-129", 10), IntErrorKind::NegOverflow);
-    // assert_error_kind!(
-    //     // The real parser source for this is `NonZero::<u8>::from_str_radix("0", 10)`,
-    //     // but that is not stable as a const fn yet.
-    //     NonZero::<u8>::from_str_radix("0", 10),
-    //     IntErrorKind::Zero,
-    //     "expected zero parse error layout"
-    // );
+    // `NonZero::<u8>::from_str_radix` is not stable as a const fn yet.
 };
 
 /// `?` for `Option` types, usable in `const` contexts.

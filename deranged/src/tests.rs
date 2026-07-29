@@ -1154,3 +1154,29 @@ fn test_easy_cast() {
     let conv_res = RangedU8::<0, 100>::try_conv(50u8);
     assert_eq!(conv_res, Ok(x));
 }
+
+#[test]
+fn parse_int_error_layout() {
+    use crate::assert_error_kind;
+    use core::mem::{align_of, size_of};
+
+    const_panic::concat_assert!(
+        size_of::<ParseIntError>() == size_of::<IntErrorKind>(),
+        "unsupported version of rust std/compiler: ParseIntError size ",
+        size_of::<ParseIntError>(),
+        " != IntErrorKind size ",
+        size_of::<IntErrorKind>(),
+    );
+    const_panic::concat_assert!(
+        align_of::<ParseIntError>() == align_of::<IntErrorKind>(),
+        "unsupported version of rust std/compiler: ParseIntError alignment ",
+        align_of::<ParseIntError>(),
+        " != IntErrorKind alignment ",
+        align_of::<IntErrorKind>(),
+    );
+    assert_error_kind("".parse::<u8>(), IntErrorKind::Empty);
+    assert_error_kind(":>".parse::<i32>(), IntErrorKind::InvalidDigit);
+    assert_error_kind("256".parse::<u8>(), IntErrorKind::PosOverflow);
+    assert_error_kind("-129".parse::<i8>(), IntErrorKind::NegOverflow);
+    assert_error_kind("0".parse::<NonZeroU8>(), IntErrorKind::Zero);
+}
