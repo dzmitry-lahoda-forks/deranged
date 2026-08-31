@@ -1155,6 +1155,52 @@ fn test_easy_cast() {
     assert_eq!(conv_res, Ok(x));
 }
 
+#[cfg(feature = "sqlx09-pg")]
+#[test]
+fn sqlx_postgres_representation_is_caller_selected() {
+    use core::ops::Bound;
+    use sqlx09::postgres::types::PgRange;
+    use sqlx09::Type;
+
+    fn assert_sqlx<T>()
+    where
+        T: Type<sqlx09::Postgres>
+            + sqlx09::postgres::PgHasArrayType
+            + for<'q> sqlx09::Encode<'q, sqlx09::Postgres>
+            + for<'r> sqlx09::Decode<'r, sqlx09::Postgres>,
+    {
+    }
+
+    assert_sqlx::<RangedU8<0, 100, i16>>();
+    assert_sqlx::<RangedU8<0, 100, i32>>();
+    assert_sqlx::<RangedU8<0, 100, i64>>();
+    assert_sqlx::<RangedU8<13, 42, core::ops::RangeInclusive<i32>>>();
+
+    assert_eq!(
+        <RangedU8<0, 100, i64> as Type<sqlx09::Postgres>>::type_info(),
+        <i64 as Type<sqlx09::Postgres>>::type_info(),
+    );
+    assert_eq!(
+        <RangedU8<13, 42, core::ops::RangeInclusive<i32>> as Type<sqlx09::Postgres>>::type_info(),
+        <PgRange<i32> as Type<sqlx09::Postgres>>::type_info(),
+    );
+
+    let encoded =
+        <core::ops::RangeInclusive<i32> as crate::PgType<u8>>::into_repr(20, 13, 42).unwrap();
+    assert_eq!(encoded, PgRange::from(13..=20));
+
+    // PostgreSQL canonicalizes the discrete inclusive range `[13,20]` to `[13,21)`.
+    let canonical = PgRange {
+        start: Bound::Included(13),
+        end: Bound::Excluded(21),
+    };
+    assert_eq!(
+        <core::ops::RangeInclusive<i32> as crate::PgType<u8>>::from_repr(canonical, 13, 42)
+            .unwrap(),
+        20,
+    );
+}
+
 #[test]
 fn parse_int_error_layout() {
     use crate::assert_error_kind;

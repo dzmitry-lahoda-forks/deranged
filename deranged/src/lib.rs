@@ -19,7 +19,6 @@ extern crate alloc;
 #[cfg(test)]
 mod tests;
 mod unsafe_wrapper;
-
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::error::Error;
@@ -30,6 +29,126 @@ use core::num::NonZero;
 use core::str::FromStr;
 
 pub use core::num::{IntErrorKind, ParseIntError};
+
+#[cfg(feature = "sqlx09-pg")]
+/// Selects the SQLx PostgreSQL representation for a ranged integer.
+pub trait PgType<Primitive>
+where
+    Primitive: Send + Sync + 'static,
+{
+    /// Rust type whose SQLx implementation supplies the PostgreSQL metadata and wire format.
+    type Repr: sqlx09::Type<sqlx09::Postgres>
+        + sqlx09::postgres::PgHasArrayType
+        + Send
+        + Sync
+        + 'static;
+
+    /// Converts a ranged scalar into the selected PostgreSQL representation.
+    fn into_repr(
+        value: Primitive,
+        min: Primitive,
+        max: Primitive,
+    ) -> Result<Self::Repr, alloc::boxed::Box<dyn Error + Send + Sync + 'static>>;
+
+    /// Converts the selected PostgreSQL representation back into a ranged scalar.
+    fn from_repr(
+        value: Self::Repr,
+        min: Primitive,
+        max: Primitive,
+    ) -> Result<Primitive, alloc::boxed::Box<dyn Error + Send + Sync + 'static>>;
+}
+
+#[cfg(feature = "sqlx09-pg")]
+macro_rules! impl_pg_types {
+    (
+        scalar { $($primitive:ty => [$($repr:ty),+ $(,)?]),+ $(,)? }
+        range { $($range:ty => $range_repr:ty),+ $(,)? }
+    ) => {
+    $($(
+        impl PgType<$primitive> for $repr {
+            type Repr = $repr;
+
+            fn into_repr(
+                value: $primitive,
+                _min: $primitive,
+                _max: $primitive,
+            ) -> Result<Self::Repr, alloc::boxed::Box<dyn Error + Send + Sync + 'static>> {
+                Ok(Self::Repr::try_from(value)?)
+            }
+
+            fn from_repr(
+                value: Self::Repr,
+                _min: $primitive,
+                _max: $primitive,
+            ) -> Result<$primitive, alloc::boxed::Box<dyn Error + Send + Sync + 'static>> {
+                Ok(value.try_into()?)
+            }
+        }
+    )+)+
+
+    $(
+        impl PgType<$range> for core::ops::RangeInclusive<$range_repr> {
+            type Repr = sqlx09::postgres::types::PgRange<$range_repr>;
+
+            fn into_repr(
+                value: $range,
+                min: $range,
+                _max: $range,
+            ) -> Result<Self::Repr, alloc::boxed::Box<dyn Error + Send + Sync + 'static>> {
+                Ok(Self::Repr::from(
+                    <$range_repr>::from(min)..=<$range_repr>::from(value),
+                ))
+            }
+
+            fn from_repr(
+                value: Self::Repr,
+                min: $range,
+                max: $range,
+            ) -> Result<$range, alloc::boxed::Box<dyn Error + Send + Sync + 'static>> {
+                use core::ops::Bound;
+
+                let lower = match value.start {
+                    Bound::Included(value) => value,
+                    Bound::Excluded(value) => value.checked_add(1).ok_or(TryFromIntError)?,
+                    Bound::Unbounded => return Err(TryFromIntError.into()),
+                };
+                if lower != <$range_repr>::from(min) {
+                    return Err(TryFromIntError.into());
+                }
+
+                let upper = match value.end {
+                    Bound::Included(value) => value,
+                    Bound::Excluded(value) => value.checked_sub(1).ok_or(TryFromIntError)?,
+                    Bound::Unbounded => return Err(TryFromIntError.into()),
+                };
+                let upper = <$range>::try_from(upper).map_err(|_| TryFromIntError)?;
+                if upper < min || upper > max {
+                    return Err(TryFromIntError.into());
+                }
+
+                Ok(upper)
+            }
+        }
+    )+
+    };
+}
+
+#[cfg(feature = "sqlx09-pg")]
+impl_pg_types! {
+    scalar {
+        u8 => [i16, i32, i64],
+        u16 => [i32, i64],
+        u32 => [i64],
+        u64 => [i64],
+        i8 => [i16, i32, i64],
+        i16 => [i16, i32, i64],
+        i32 => [i32, i64],
+        i64 => [i64],
+    }
+    range {
+        u8 => i32,
+    }
+}
 
 /// A macro to define a ranged integer with an automatically computed inner type.
 ///
@@ -251,67 +370,6 @@ macro_rules! article {
     };
 }
 
-/// Assert that a generated ranged type fits in its SQL storage type.
-/// Ideally we'd conditionally implement sqlx enc/dec based on
-/// range, via witness types on stable or via const cmp on nightly             
-#[cfg(feature = "sqlx09-pg")]
-macro_rules! assert_sql_storage_range {
-    ($is_signed:ident, $type:ident, $sql_int:ident, $min:expr, $max:expr) => {
-        if_signed! { $is_signed
-            const_panic::concat_assert!(
-                $min as i128 >= <$sql_int>::MIN as i128,
-                stringify!($type),
-                "<",
-                $min,
-                ", ",
-                $max,
-                "> minimum ",
-                $min,
-                " does not fit SQL storage type ",
-                stringify!($sql_int),
-                " range ",
-                <$sql_int>::MIN,
-                "..=",
-                <$sql_int>::MAX,
-            );
-            const_panic::concat_assert!(
-                $max as i128 <= <$sql_int>::MAX as i128,
-                stringify!($type),
-                "<",
-                $min,
-                ", ",
-                $max,
-                "> maximum ",
-                $max,
-                " does not fit SQL storage type ",
-                stringify!($sql_int),
-                " range ",
-                <$sql_int>::MIN,
-                "..=",
-                <$sql_int>::MAX,
-            );
-        }
-        if_unsigned! { $is_signed
-            const_panic::concat_assert!(
-                $max as u128 <= <$sql_int>::MAX as u128,
-                stringify!($type),
-                "<",
-                $min,
-                ", ",
-                $max,
-                "> maximum ",
-                $max,
-                " does not fit SQL storage type ",
-                stringify!($sql_int),
-                " range ",
-                <$sql_int>::MIN,
-                "..=",
-                <$sql_int>::MAX,
-            );
-        }
-    };
-}
-
 /// The capacity of the temporary buffer used to format integration type names.
 #[cfg(feature = "schemars")]
 const TYPE_NAME_CAPACITY: usize = 192;
@@ -353,13 +411,13 @@ macro_rules! impl_ranged {
             optional_alias: $optional_alias:ident
             from: [$($from:ident($from_internal:ident))+]
             $(prost_type: $prost_type:ident)?
-            $(sqlx: $sql_int:ident)?
             $(manual: [$($skips:ident)+])?
         }
     )*) => {$(
         #[doc = concat!("Equivalent to `", stringify!($type), "`")]
         #[expect(non_camel_case_types, reason = "symmetry with primitives")]
-        pub type $alias<const MIN: $internal, const MAX: $internal> = $type<MIN, MAX>;
+        pub type $alias<const MIN: $internal, const MAX: $internal, Pg = ()>
+            = $type<MIN, MAX, Pg>;
 
         #[doc = concat!("Equivalent to `", stringify!($optional_type), "`")]
         #[expect(non_camel_case_types, reason = "closest visually to `Option<T>`")]
@@ -373,16 +431,40 @@ macro_rules! impl_ranged {
             "` that is known to be in the range `MIN..=MAX`.",
         )]
         #[repr(transparent)]
-        #[derive(Clone, Copy, Eq, Ord, Hash)]
         #[cfg_attr(feature = "zerocopy", derive(
             zerocopy_derive::FromBytes,
             zerocopy_derive::IntoBytes,
             zerocopy_derive::Immutable,
             zerocopy_derive::KnownLayout,
         ))]
-        pub struct $type<const MIN: $internal, const MAX: $internal>(
+        pub struct $type<const MIN: $internal, const MAX: $internal, Pg = ()>(
             Unsafe<$internal>,
+            core::marker::PhantomData<fn() -> Pg>,
         );
+
+        impl<const MIN: $internal, const MAX: $internal, Pg> Copy for $type<MIN, MAX, Pg> {}
+
+        impl<const MIN: $internal, const MAX: $internal, Pg> Clone for $type<MIN, MAX, Pg> {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+
+        impl<const MIN: $internal, const MAX: $internal, Pg> Eq for $type<MIN, MAX, Pg> {}
+
+        impl<const MIN: $internal, const MAX: $internal, Pg> Ord for $type<MIN, MAX, Pg> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.get().cmp(&other.get())
+            }
+        }
+
+        impl<const MIN: $internal, const MAX: $internal, Pg> core::hash::Hash
+            for $type<MIN, MAX, Pg>
+        {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                self.get().hash(state);
+            }
+        }
 
         #[doc = concat!(
             "An optional `",
@@ -421,8 +503,8 @@ macro_rules! impl_ranged {
         #[cfg(feature = "bytemuck")]
         // Safety: The type is `repr(transparent)` over an integer type, which has no uninitialized
         // bytes. The range invariant restricts valid values, so this must not imply `AnyBitPattern`.
-        unsafe impl<const MIN: $internal, const MAX: $internal> bytemuck::NoUninit
-            for $type<MIN, MAX>
+        unsafe impl<const MIN: $internal, const MAX: $internal, Pg: 'static> bytemuck::NoUninit
+            for $type<MIN, MAX, Pg>
         {
         }
 
@@ -434,17 +516,17 @@ macro_rules! impl_ranged {
         {
         }
 
-        impl $type<0, 0> {
+        impl<Pg> $type<0, 0, Pg> {
             #[doc = concat!("A ", stringify!($type), " that is always `VALUE`.")]
             #[inline(always)]
-            pub const fn exact<const VALUE: $internal>() -> $type<VALUE, VALUE> {
+            pub const fn exact<const VALUE: $internal>() -> $type<VALUE, VALUE, Pg> {
                 // Safety: The value is the only one in range.
                 unsafe { $type::new_unchecked(VALUE) }
             }
         }
 
         if_unsigned! { $is_signed
-        impl $type<1, { $internal::MAX }> {
+        impl<Pg> $type<1, { $internal::MAX }, Pg> {
             /// Creates a ranged integer from a non-zero value.
             #[inline(always)]
             pub const fn from_nonzero(value: NonZero<$internal>) -> Self {
@@ -460,7 +542,7 @@ macro_rules! impl_ranged {
             }
         }}
 
-        impl<const MIN: $internal, const MAX: $internal> $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> $type<MIN, MAX, Pg> {
             /// The smallest value that can be represented by this type.
             // Safety: `MIN` is in range by definition.
             pub const MIN: Self = Self::new_static::<MIN>();
@@ -488,7 +570,7 @@ macro_rules! impl_ranged {
                 // Safety: The caller must ensure that the value is in range.
                 unsafe {
                     assert_unchecked(MIN <= value && value <= MAX);
-                    Self(Unsafe::new(value))
+                    Self(Unsafe::new(value), core::marker::PhantomData)
                 }
             }
 
@@ -590,7 +672,7 @@ macro_rules! impl_ranged {
             #[inline(always)]
             pub const fn expand<const NEW_MIN: $internal, const NEW_MAX: $internal>(
                 self,
-            ) -> $type<NEW_MIN, NEW_MAX> {
+            ) -> $type<NEW_MIN, NEW_MAX, Pg> {
                 const {
                     assert!(MIN <= MAX);
                     assert!(NEW_MIN <= NEW_MAX);
@@ -608,14 +690,14 @@ macro_rules! impl_ranged {
             pub const fn narrow<
                 const NEW_MIN: $internal,
                 const NEW_MAX: $internal,
-            >(self) -> Option<$type<NEW_MIN, NEW_MAX>> {
+            >(self) -> Option<$type<NEW_MIN, NEW_MAX, Pg>> {
                 const {
                     assert!(MIN <= MAX);
                     assert!(NEW_MIN <= NEW_MAX);
                     assert!(NEW_MIN >= MIN);
                     assert!(NEW_MAX <= MAX);
                 }
-                $type::<NEW_MIN, NEW_MAX>::new(self.get())
+                $type::<NEW_MIN, NEW_MAX, Pg>::new(self.get())
             }
 
             /// Narrow the range that the value may be in. **Fails to compile** if the new range is
@@ -628,7 +710,7 @@ macro_rules! impl_ranged {
             pub const unsafe fn narrow_unchecked<
                 const NEW_MIN: $internal,
                 const NEW_MAX: $internal,
-            >(self) -> $type<NEW_MIN, NEW_MAX> {
+            >(self) -> $type<NEW_MIN, NEW_MAX, Pg> {
                 const {
                     assert!(MIN <= MAX);
                     assert!(NEW_MIN <= NEW_MAX);
@@ -1276,7 +1358,7 @@ macro_rules! impl_ranged {
             /// Creates an optional ranged value that is present.
             #[allow(non_snake_case)]
             #[inline(always)]
-            pub const fn Some(value: $type<MIN, MAX>) -> Self {
+            pub const fn Some<Pg>(value: $type<MIN, MAX, Pg>) -> Self {
                 const { assert!(MIN <= MAX); }
                 Self(value.get())
             }
@@ -1360,7 +1442,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::Debug for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::Debug for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1376,7 +1458,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::Display for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::Display for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1388,7 +1470,8 @@ macro_rules! impl_ranged {
         impl<
             const MIN: $internal,
             const MAX: $internal,
-        > smart_display::SmartDisplay for $type<MIN, MAX> {
+            Pg,
+        > smart_display::SmartDisplay for $type<MIN, MAX, Pg> {
             type Metadata = <$internal as smart_display::SmartDisplay>::Metadata;
 
             #[inline(always)]
@@ -1419,7 +1502,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> AsRef<$internal> for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> AsRef<$internal> for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn as_ref(&self) -> &$internal {
                 const { assert!(MIN <= MAX); }
@@ -1427,7 +1510,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> Borrow<$internal> for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> Borrow<$internal> for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn borrow(&self) -> &$internal {
                 const { assert!(MIN <= MAX); }
@@ -1438,11 +1521,13 @@ macro_rules! impl_ranged {
         impl<
             const MIN_A: $internal,
             const MAX_A: $internal,
+            PgA,
             const MIN_B: $internal,
             const MAX_B: $internal,
-        > PartialEq<$type<MIN_B, MAX_B>> for $type<MIN_A, MAX_A> {
+            PgB,
+        > PartialEq<$type<MIN_B, MAX_B, PgB>> for $type<MIN_A, MAX_A, PgA> {
             #[inline(always)]
-            fn eq(&self, other: &$type<MIN_B, MAX_B>) -> bool {
+            fn eq(&self, other: &$type<MIN_B, MAX_B, PgB>) -> bool {
                 const {
                     assert!(MIN_A <= MAX_A);
                     assert!(MIN_B <= MAX_B);
@@ -1470,11 +1555,13 @@ macro_rules! impl_ranged {
         impl<
             const MIN_A: $internal,
             const MAX_A: $internal,
+            PgA,
             const MIN_B: $internal,
             const MAX_B: $internal,
-        > PartialOrd<$type<MIN_B, MAX_B>> for $type<MIN_A, MAX_A> {
+            PgB,
+        > PartialOrd<$type<MIN_B, MAX_B, PgB>> for $type<MIN_A, MAX_A, PgA> {
             #[inline(always)]
-            fn partial_cmp(&self, other: &$type<MIN_B, MAX_B>) -> Option<Ordering> {
+            fn partial_cmp(&self, other: &$type<MIN_B, MAX_B, PgB>) -> Option<Ordering> {
                 const {
                     assert!(MIN_A <= MAX_A);
                     assert!(MIN_B <= MAX_B);
@@ -1526,7 +1613,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::Binary for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::Binary for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1534,7 +1621,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::LowerHex for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::LowerHex for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1542,7 +1629,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::UpperHex for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::UpperHex for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1550,7 +1637,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::LowerExp for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::LowerExp for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1558,7 +1645,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::UpperExp for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::UpperExp for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1566,7 +1653,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> fmt::Octal for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> fmt::Octal for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 const { assert!(MIN <= MAX); }
@@ -1575,24 +1662,24 @@ macro_rules! impl_ranged {
         }
 
         if_unsigned! { $is_signed
-            impl From<NonZero<$internal>> for $type<1, { $internal::MAX }> {
+            impl<Pg> From<NonZero<$internal>> for $type<1, { $internal::MAX }, Pg> {
                 #[inline(always)]
                 fn from(value: NonZero<$internal>) -> Self {
                     Self::from_nonzero(value)
                 }
             }
 
-            impl From<$type<1, { $internal::MAX }>> for NonZero<$internal> {
+            impl<Pg> From<$type<1, { $internal::MAX }, Pg>> for NonZero<$internal> {
                 #[inline(always)]
-                fn from(value: $type<1, { $internal::MAX }>) -> Self {
+                fn from(value: $type<1, { $internal::MAX }, Pg>) -> Self {
                     value.to_nonzero()
                 }
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>> for $internal {
+        impl<const MIN: $internal, const MAX: $internal, Pg> From<$type<MIN, MAX, Pg>> for $internal {
             #[inline(always)]
-            fn from(value: $type<MIN, MAX>) -> Self {
+            fn from(value: $type<MIN, MAX, Pg>) -> Self {
                 const { assert!(MIN <= MAX); }
                 value.get()
             }
@@ -1601,9 +1688,10 @@ macro_rules! impl_ranged {
         impl<
             const MIN: $internal,
             const MAX: $internal,
-        > From<$type<MIN, MAX>> for $optional_type<MIN, MAX> {
+            Pg,
+        > From<$type<MIN, MAX, Pg>> for $optional_type<MIN, MAX> {
             #[inline(always)]
-            fn from(value: $type<MIN, MAX>) -> Self {
+            fn from(value: $type<MIN, MAX, Pg>) -> Self {
                 const { assert!(MIN <= MAX); }
                 Self::Some(value)
             }
@@ -1634,7 +1722,7 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> TryFrom<$internal> for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> TryFrom<$internal> for $type<MIN, MAX, Pg> {
             type Error = TryFromIntError;
 
             #[inline]
@@ -1644,12 +1732,12 @@ macro_rules! impl_ranged {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> FromStr for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> FromStr for $type<MIN, MAX, Pg> {
             type Err = ParseIntError;
 
             #[inline]
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                $type::<MIN, MAX>::from_str_radix(s, 10)
+                $type::<MIN, MAX, Pg>::from_str_radix(s, 10)
             }
         }
 
@@ -1726,7 +1814,7 @@ macro_rules! impl_ranged {
         /// serialize as an integer when the whole range is within JSON's safe integer range,
         /// otherwise as an integer string.
         #[cfg(feature = "serde")]
-        impl<const MIN: $internal, const MAX: $internal> serde_core::Serialize for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> serde_core::Serialize for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn serialize<S: serde_core::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>
             {
@@ -1779,18 +1867,21 @@ macro_rules! impl_ranged {
             'de,
             const MIN: $internal,
             const MAX: $internal,
-        > serde_core::Deserialize<'de> for $type<MIN, MAX> {
+            Pg,
+        > serde_core::Deserialize<'de> for $type<MIN, MAX, Pg> {
             #[inline]
             fn deserialize<D: serde_core::Deserializer<'de>>(deserializer: D)
                 -> Result<Self, D::Error>
             {
                 const { assert!(MIN <= MAX); }
 
-                struct Visitor<const MIN: $internal, const MAX: $internal>;
+                struct Visitor<const MIN: $internal, const MAX: $internal, Pg>(
+                    core::marker::PhantomData<fn() -> Pg>,
+                );
 
-                impl<const MIN: $internal, const MAX: $internal> serde_core::de::Visitor<'_>
-                for Visitor<MIN, MAX> {
-                    type Value = $type<MIN, MAX>;
+                impl<const MIN: $internal, const MAX: $internal, Pg> serde_core::de::Visitor<'_>
+                for Visitor<MIN, MAX, Pg> {
+                    type Value = $type<MIN, MAX, Pg>;
 
                     #[inline]
                     fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1836,7 +1927,7 @@ macro_rules! impl_ranged {
                 }
 
                 if deserializer.is_human_readable() {
-                    deserializer.deserialize_any(Visitor::<MIN, MAX>)
+                    deserializer.deserialize_any(Visitor::<MIN, MAX, Pg>(core::marker::PhantomData))
                 } else {
                     let internal = <$internal>::deserialize(deserializer)?;
                     Self::new(internal)
@@ -1867,7 +1958,7 @@ macro_rules! impl_ranged {
                     if internal == Self::NICHE {
                         Ok(Self::None)
                     } else {
-                        $type::new(internal)
+                        $type::<MIN, MAX>::new(internal)
                             .map(Self::Some)
                             .ok_or_else(|| serde_core::de::Error::custom("integer out of range"))
                     }
@@ -1878,7 +1969,7 @@ macro_rules! impl_ranged {
         /// Pure binary LE, transparent to underlying type
         /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
-        impl<const MIN: $internal, const MAX: $internal> borsh::BorshSerialize for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> borsh::BorshSerialize for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
                 const { assert!(MIN <= MAX); }
@@ -1902,8 +1993,8 @@ macro_rules! impl_ranged {
         /// Pure binary LE, transparent to underlying type
         /// (no byte reduction based on niche value optimization based on narrow range).
         #[cfg(feature = "borsh")]
-        impl<const MIN: $internal, const MAX: $internal> borsh::BorshDeserialize
-            for $type<MIN, MAX>
+        impl<const MIN: $internal, const MAX: $internal, Pg> borsh::BorshDeserialize
+            for $type<MIN, MAX, Pg>
         {
             #[inline]
             fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
@@ -1926,7 +2017,7 @@ macro_rules! impl_ranged {
                 if internal == Self::NICHE {
                     Ok(Self::None)
                 } else {
-                    $type::new(internal)
+                    $type::<MIN, MAX>::new(internal)
                         .map(Self::Some)
                         .ok_or_else(|| borsh::io::ErrorKind::InvalidData.into())
                 }
@@ -1940,7 +2031,7 @@ macro_rules! impl_ranged {
         /// Because `deranged::Reanged$type<$min, $max>"` is infinite amount of types to handle,
         /// and `BorshSchema` handles only byte boundaries, not bits nor decimal.
         #[cfg(feature = "borsh_schema")]
-        impl<const MIN: $internal, const MAX: $internal> borsh::BorshSchema for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> borsh::BorshSchema for $type<MIN, MAX, Pg> {
             #[inline]
             fn add_definitions_recursively(
                 definitions: &mut borsh::__private::maybestd::collections::BTreeMap<
@@ -1996,7 +2087,7 @@ macro_rules! impl_ranged {
         /// wider human-readable input shape: integer strings or integer numbers, provided they fit
         /// the ranged bounds.
         #[cfg(feature = "schemars")]
-        impl<const MIN: $internal, const MAX: $internal> $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> $type<MIN, MAX, Pg> {
             #[inline(always)]
             const fn human_type_name_str() -> const_format::StrWriter<[u8; TYPE_NAME_CAPACITY]> {
                 const { assert!(MIN <= MAX); }
@@ -2022,7 +2113,8 @@ macro_rules! impl_ranged {
         impl<
             const MIN: $internal,
             const MAX: $internal,
-        > schemars::JsonSchema for $type<MIN, MAX> {
+            Pg,
+        > schemars::JsonSchema for $type<MIN, MAX, Pg> {
             fn inline_schema() -> bool {
                 // avoid aliasing all $defs due to same schema name
                 true
@@ -2085,12 +2177,12 @@ macro_rules! impl_ranged {
 
         $(
         #[cfg(feature = "prost-types")]
-        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+        impl<const MIN: $internal, const MAX: $internal, Pg> From<$type<MIN, MAX, Pg>>
             for prost_types::Value
         {
             #[inline(always)]
             #[allow(trivial_numeric_casts)]
-            fn from(value: $type<MIN, MAX>) -> Self {
+            fn from(value: $type<MIN, MAX, Pg>) -> Self {
                 const { assert!(MIN <= MAX); }
                 (value.get() as $prost_type).into()
             }
@@ -2115,30 +2207,36 @@ macro_rules! impl_ranged {
         }
         )?
 
-        $(
         #[cfg(feature = "sqlx09-pg")]
-        impl<const MIN: $internal, const MAX: $internal> sqlx09::Type<sqlx09::Postgres>
-            for $type<MIN, MAX>
+        impl<const MIN: $internal, const MAX: $internal, Pg> sqlx09::Type<sqlx09::Postgres>
+            for $type<MIN, MAX, Pg>
+        where
+            Pg: PgType<$internal>,
         {
             #[inline]
             fn type_info() -> sqlx09::postgres::PgTypeInfo {
-                <$sql_int as sqlx09::Type<sqlx09::Postgres>>::type_info()
+                <Pg::Repr as sqlx09::Type<sqlx09::Postgres>>::type_info()
             }
         }
 
         #[cfg(feature = "sqlx09-pg")]
-        impl<const MIN: $internal, const MAX: $internal> sqlx09::postgres::PgHasArrayType
-            for $type<MIN, MAX>
+        impl<const MIN: $internal, const MAX: $internal, Pg> sqlx09::postgres::PgHasArrayType
+            for $type<MIN, MAX, Pg>
+        where
+            Pg: PgType<$internal>,
         {
             #[inline]
             fn array_type_info() -> sqlx09::postgres::PgTypeInfo {
-                <$sql_int as sqlx09::postgres::PgHasArrayType>::array_type_info()
+                <Pg::Repr as sqlx09::postgres::PgHasArrayType>::array_type_info()
             }
         }
 
         #[cfg(feature = "sqlx09-pg")]
-        impl<const MIN: $internal, const MAX: $internal>
-            sqlx09::Encode<'_, sqlx09::Postgres> for $type<MIN, MAX>
+        impl<'q, const MIN: $internal, const MAX: $internal, Pg>
+            sqlx09::Encode<'q, sqlx09::Postgres> for $type<MIN, MAX, Pg>
+        where
+            Pg: PgType<$internal>,
+            Pg::Repr: sqlx09::Encode<'q, sqlx09::Postgres>,
         {
             #[inline]
             fn encode_by_ref(
@@ -2149,39 +2247,32 @@ macro_rules! impl_ranged {
                 alloc::boxed::Box<dyn core::error::Error + 'static + Send + Sync>,
             > {
                 const { assert!(MIN <= MAX); }
-                assert_sql_storage_range!($is_signed, $type, $sql_int, MIN, MAX);
-
-                let value: $sql_int = self
-                    .get()
-                    .try_into()
-                    .expect(concat!(stringify!($type), " value does not fit SQL storage type"));
-
-                <$sql_int as sqlx09::Encode<sqlx09::Postgres>>::encode_by_ref(&value, buf)
+                let value = Pg::into_repr(self.get(), MIN, MAX)?;
+                <Pg::Repr as sqlx09::Encode<sqlx09::Postgres>>::encode(value, buf)
             }
         }
 
         #[cfg(feature = "sqlx09-pg")]
-        impl<'r, const MIN: $internal, const MAX: $internal>
-            sqlx09::Decode<'r, sqlx09::Postgres> for $type<MIN, MAX>
+        impl<'r, const MIN: $internal, const MAX: $internal, Pg>
+            sqlx09::Decode<'r, sqlx09::Postgres> for $type<MIN, MAX, Pg>
+        where
+            Pg: PgType<$internal>,
+            Pg::Repr: sqlx09::Decode<'r, sqlx09::Postgres>,
         {
             #[inline]
             fn decode(
                 value: <sqlx09::Postgres as sqlx09::Database>::ValueRef<'r>,
             ) -> Result<Self, alloc::boxed::Box<dyn core::error::Error + 'static + Send + Sync>> {
                 const { assert!(MIN <= MAX); }
-                assert_sql_storage_range!($is_signed, $type, $sql_int, MIN, MAX);
-
-                let value = <$sql_int as sqlx09::Decode<sqlx09::Postgres>>::decode(value)?;
-                let value: $internal = value.try_into().map_err(|_| TryFromIntError)?;
+                let value = <Pg::Repr as sqlx09::Decode<sqlx09::Postgres>>::decode(value)?;
+                let value = Pg::from_repr(value, MIN, MAX)?;
 
                 Self::new(value).ok_or(TryFromIntError).map_err(Into::into)
             }
         }
-        )?
-
         /// Store as the primitive integer in redb.
         #[cfg(feature = "redb")]
-        impl<const MIN: $internal, const MAX: $internal> redb::Value for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg: 'static> redb::Value for $type<MIN, MAX, Pg> {
             type SelfType<'a>
                 = Self
             where
@@ -2224,7 +2315,7 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "redb")]
-        impl<const MIN: $internal, const MAX: $internal> redb::Key for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg: 'static> redb::Key for $type<MIN, MAX, Pg> {
             #[inline]
             fn compare(data1: &[u8], data2: &[u8]) -> Ordering {
                 <Self as redb::Value>::from_bytes(data1)
@@ -2263,7 +2354,7 @@ macro_rules! impl_ranged {
                 if value == Self::NICHE {
                     Self::None
                 } else {
-                    $type::new(value)
+                    $type::<MIN, MAX>::new(value)
                         .map(Self::Some)
                         .expect("redb value is outside the optional ranged integer bounds")
                 }
@@ -2297,9 +2388,10 @@ macro_rules! impl_ranged {
         impl<
             const MIN: $internal,
             const MAX: $internal,
-        > rand08::distributions::Distribution<$type<MIN, MAX>> for rand08::distributions::Standard {
+            Pg,
+        > rand08::distributions::Distribution<$type<MIN, MAX, Pg>> for rand08::distributions::Standard {
             #[inline]
-            fn sample<R: rand08::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX> {
+            fn sample<R: rand08::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX, Pg> {
                 const { assert!(MIN <= MAX); }
                 $type::new(rng.gen_range(MIN..=MAX)).expect("rand failed to generate a valid value")
             }
@@ -2311,9 +2403,10 @@ macro_rules! impl_ranged {
             impl<
                 const MIN: $internal,
                 const MAX: $internal,
-            > rand09::distr::Distribution<$type<MIN, MAX>> for rand09::distr::StandardUniform {
+                Pg,
+            > rand09::distr::Distribution<$type<MIN, MAX, Pg>> for rand09::distr::StandardUniform {
                 #[inline]
-                fn sample<R: rand09::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX> {
+                fn sample<R: rand09::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX, Pg> {
                     const { assert!(MIN <= MAX); }
                     $type::new(rng.random_range(MIN..=MAX)).expect("rand failed to generate a valid value")
                 }
@@ -2326,9 +2419,10 @@ macro_rules! impl_ranged {
             impl<
                 const MIN: $internal,
                 const MAX: $internal,
-            > rand010::distr::Distribution<$type<MIN, MAX>> for rand010::distr::StandardUniform {
+                Pg,
+            > rand010::distr::Distribution<$type<MIN, MAX, Pg>> for rand010::distr::StandardUniform {
                 #[inline]
-                fn sample<R: rand010::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX> {
+                fn sample<R: rand010::Rng + ?Sized>(&self, rng: &mut R) -> $type<MIN, MAX, Pg> {
                     const { assert!(MIN <= MAX); }
                     use rand010::RngExt as _;
                     $type::new(rng.random_range(MIN..=MAX)).expect("rand failed to generate a valid value")
@@ -2385,7 +2479,7 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "num")]
-        impl<const MIN: $internal, const MAX: $internal> num_traits::Bounded for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg> num_traits::Bounded for $type<MIN, MAX, Pg> {
             #[inline(always)]
             fn min_value() -> Self {
                 const { assert!(MIN <= MAX); }
@@ -2400,7 +2494,7 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal, Src> easy_cast::Conv<Src> for $type<MIN, MAX>
+        impl<const MIN: $internal, const MAX: $internal, Pg, Src> easy_cast::Conv<Src> for $type<MIN, MAX, Pg>
         where
             $internal: easy_cast::Conv<Src>,
         {
@@ -2424,107 +2518,107 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u8 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for u8 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 u8::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u16 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for u16 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 u16::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u32 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for u32 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 u32::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u64 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for u64 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 u64::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for u128 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for u128 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 u128::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for usize {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for usize {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 usize::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i8 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for i8 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 i8::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i16 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for i16 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 i16::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i32 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for i32 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 i32::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i64 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for i64 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 i64::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for i128 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for i128 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 i128::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for isize {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for isize {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 isize::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for f32 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for f32 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 f32::try_conv(src.get())
             }
         }
         #[cfg(feature = "easy-cast")]
-        impl<const MIN: $internal, const MAX: $internal> easy_cast::Conv<$type<MIN, MAX>> for f64 {
+        impl<const MIN: $internal, const MAX: $internal, Pg> easy_cast::Conv<$type<MIN, MAX, Pg>> for f64 {
             #[inline]
-            fn try_conv(src: $type<MIN, MAX>) -> Result<Self, easy_cast::Error> {
+            fn try_conv(src: $type<MIN, MAX, Pg>) -> Result<Self, easy_cast::Error> {
                 f64::try_conv(src.get())
             }
         }
 
         #[cfg(feature = "arbitrary")]
-        impl<'a, const MIN: $internal, const MAX: $internal> arbitrary::Arbitrary<'a>
-            for $type<MIN, MAX>
+        impl<'a, const MIN: $internal, const MAX: $internal, Pg> arbitrary::Arbitrary<'a>
+            for $type<MIN, MAX, Pg>
         {
             #[inline]
             fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
@@ -2560,8 +2654,8 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "proptest")]
-        impl<const MIN: $internal, const MAX: $internal> proptest::arbitrary::Arbitrary
-            for $type<MIN, MAX>
+        impl<const MIN: $internal, const MAX: $internal, Pg: 'static> proptest::arbitrary::Arbitrary
+            for $type<MIN, MAX, Pg>
         {
             type Parameters = ();
             type Strategy = proptest::strategy::Map<
@@ -2605,7 +2699,7 @@ macro_rules! impl_ranged {
         }
 
         #[cfg(feature = "quickcheck")]
-        impl<const MIN: $internal, const MAX: $internal> quickcheck::Arbitrary for $type<MIN, MAX> {
+        impl<const MIN: $internal, const MAX: $internal, Pg: 'static> quickcheck::Arbitrary for $type<MIN, MAX, Pg> {
             #[inline]
             fn arbitrary(g: &mut quickcheck::Gen) -> Self {
                 const { assert!(MIN <= MAX); }
@@ -2667,7 +2761,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: u8
-        sqlx: i16
     }
     RangedU16 {
         mod_name: ranged_u16
@@ -2691,7 +2784,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: u16
-        sqlx: i16
     }
     RangedU32 {
         mod_name: ranged_u32
@@ -2715,7 +2807,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: u32
-        sqlx: i32
     }
     RangedU64 {
         mod_name: ranged_u64
@@ -2738,7 +2829,6 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
-        sqlx: i64
     }
     RangedU128 {
         mod_name: ranged_u128
@@ -2807,7 +2897,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: i8
-        sqlx: i16
     }
     RangedI16 {
         mod_name: ranged_i16
@@ -2831,7 +2920,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: i16
-        sqlx: i16
     }
     RangedI32 {
         mod_name: ranged_i32
@@ -2855,7 +2943,6 @@ impl_ranged! {
             RangedIsize(isize)
         ]
         prost_type: i32
-        sqlx: i32
     }
     RangedI64 {
         mod_name: ranged_i64
@@ -2878,7 +2965,6 @@ impl_ranged! {
             RangedI128(i128)
             RangedIsize(isize)
         ]
-        sqlx: i64
     }
     RangedI128 {
         mod_name: ranged_i128
@@ -2930,25 +3016,25 @@ impl_ranged! {
 #[cfg(feature = "ruint")]
 macro_rules! impl_ruint_u256_from_unsigned {
     ($($type:ident($internal:ident))+) => {$(
-        impl<const MIN: $internal, const MAX: $internal> ruint::UintTryFrom<$type<MIN, MAX>>
+        impl<const MIN: $internal, const MAX: $internal, Pg> ruint::UintTryFrom<$type<MIN, MAX, Pg>>
             for ruint::aliases::U256
         {
             #[inline(always)]
             #[allow(trivial_numeric_casts)]
             fn uint_try_from(
-                value: $type<MIN, MAX>,
+                value: $type<MIN, MAX, Pg>,
             ) -> Result<Self, ruint::ToUintError<Self>> {
                 const { assert!(MIN <= MAX); }
                 Self::try_from(value.get() as u128)
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+        impl<const MIN: $internal, const MAX: $internal, Pg> From<$type<MIN, MAX, Pg>>
             for ruint::aliases::U256
         {
             #[inline(always)]
             #[allow(trivial_numeric_casts)]
-            fn from(value: $type<MIN, MAX>) -> Self {
+            fn from(value: $type<MIN, MAX, Pg>) -> Self {
                 <Self as ruint::UintTryFrom<_>>::uint_try_from(value)
                     .expect("ranged integer always fits in U256")
             }
@@ -2959,12 +3045,12 @@ macro_rules! impl_ruint_u256_from_unsigned {
 #[cfg(feature = "ruint")]
 macro_rules! impl_ruint_u256_from_non_negative_signed {
     ($($type:ident($internal:ident))+) => {$(
-        impl<const MIN: $internal, const MAX: $internal> ruint::UintTryFrom<$type<MIN, MAX>>
+        impl<const MIN: $internal, const MAX: $internal, Pg> ruint::UintTryFrom<$type<MIN, MAX, Pg>>
             for ruint::aliases::U256
         {
             #[inline(always)]
             fn uint_try_from(
-                value: $type<MIN, MAX>,
+                value: $type<MIN, MAX, Pg>,
             ) -> Result<Self, ruint::ToUintError<Self>> {
                 const {
                     assert!(MIN <= MAX);
@@ -2974,11 +3060,11 @@ macro_rules! impl_ruint_u256_from_non_negative_signed {
             }
         }
 
-        impl<const MIN: $internal, const MAX: $internal> From<$type<MIN, MAX>>
+        impl<const MIN: $internal, const MAX: $internal, Pg> From<$type<MIN, MAX, Pg>>
             for ruint::aliases::U256
         {
             #[inline(always)]
-            fn from(value: $type<MIN, MAX>) -> Self {
+            fn from(value: $type<MIN, MAX, Pg>) -> Self {
                 <Self as ruint::UintTryFrom<_>>::uint_try_from(value)
                     .expect("non-negative ranged integer always fits in U256")
             }
@@ -3004,57 +3090,6 @@ impl_ruint_u256_from_non_negative_signed! {
     RangedI64(i64)
     RangedI128(i128)
     RangedIsize(isize)
-}
-
-#[cfg(feature = "sqlx09-pg")]
-impl<const MIN: u128, const MAX: u128> sqlx09::Type<sqlx09::Postgres> for RangedU128<MIN, MAX> {
-    #[inline]
-    fn type_info() -> sqlx09::postgres::PgTypeInfo {
-        <sqlx09::types::BigDecimal as sqlx09::Type<sqlx09::Postgres>>::type_info()
-    }
-}
-
-#[cfg(feature = "sqlx09-pg")]
-impl<const MIN: u128, const MAX: u128> sqlx09::postgres::PgHasArrayType for RangedU128<MIN, MAX> {
-    #[inline]
-    fn array_type_info() -> sqlx09::postgres::PgTypeInfo {
-        <sqlx09::types::BigDecimal as sqlx09::postgres::PgHasArrayType>::array_type_info()
-    }
-}
-
-#[cfg(feature = "sqlx09-pg")]
-impl<const MIN: u128, const MAX: u128> sqlx09::Encode<'_, sqlx09::Postgres>
-    for RangedU128<MIN, MAX>
-{
-    #[inline]
-    fn encode_by_ref(
-        &self,
-        buf: &mut <sqlx09::Postgres as sqlx09::Database>::ArgumentBuffer,
-    ) -> Result<sqlx09::encode::IsNull, alloc::boxed::Box<dyn Error + 'static + Send + Sync>> {
-        let value = sqlx09::types::BigDecimal::from(self.get());
-        <sqlx09::types::BigDecimal as sqlx09::Encode<sqlx09::Postgres>>::encode_by_ref(&value, buf)
-    }
-}
-
-#[cfg(feature = "sqlx09-pg")]
-impl<'r, const MIN: u128, const MAX: u128> sqlx09::Decode<'r, sqlx09::Postgres>
-    for RangedU128<MIN, MAX>
-{
-    #[inline]
-    fn decode(
-        value: <sqlx09::Postgres as sqlx09::Database>::ValueRef<'r>,
-    ) -> Result<Self, alloc::boxed::Box<dyn Error + 'static + Send + Sync>> {
-        let value = <sqlx09::types::BigDecimal as sqlx09::Decode<sqlx09::Postgres>>::decode(value)?;
-
-        if !value.is_integer() {
-            return Err(TryFromIntError.into());
-        }
-
-        use num_traits::ToPrimitive as _;
-        let value = value.to_u128().ok_or(TryFromIntError)?;
-
-        Ok(Self::new(value).ok_or(TryFromIntError)?)
-    }
 }
 
 #[cfg(feature = "rand09")]
